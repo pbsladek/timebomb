@@ -55,6 +55,11 @@ pub struct Annotation {
 
     /// Computed status relative to the "today" date used during scanning.
     pub status: Status,
+
+    /// Owner inferred from git blame when no explicit `[owner]` bracket is present.
+    /// Populated only when `--blame` is passed; `None` otherwise.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub blamed_owner: Option<String>,
 }
 
 impl Annotation {
@@ -133,6 +138,7 @@ mod tests {
             owner: None,
             message: "some message".to_string(),
             status,
+            blamed_owner: None,
         }
     }
 
@@ -233,6 +239,7 @@ mod tests {
             owner: Some("alice".to_string()),
             message: "remove after upgrade".to_string(),
             status: Status::Ok,
+            blamed_owner: None,
         };
         let json = serde_json::to_string(&ann).unwrap();
         assert!(json.contains("2099-12-31"));

@@ -410,6 +410,7 @@ mod tests {
             owner: None,
             message: "test".to_string(),
             status,
+            blamed_owner: None,
         }
     }
 

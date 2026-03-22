@@ -116,6 +116,9 @@ timebomb check --format github
 
 # Use a specific config file
 timebomb check --config /path/to/.timebomb.toml
+
+# Enrich unowned annotations with the git blame author
+timebomb check --blame
 ```
 
 ### `list` — List all annotations
@@ -135,7 +138,71 @@ timebomb list --format json
 
 # Scan a specific directory
 timebomb list ./src
+
+# Enrich unowned annotations with the git blame author
+timebomb list --blame
 ```
+
+### `hook` — Manage the git pre-commit hook
+
+```bash
+# Install a timebomb pre-commit hook (prompts for confirmation)
+timebomb hook install
+
+# Install without prompting (useful in scripts)
+timebomb hook install --yes
+
+# Remove the timebomb block from the pre-commit hook
+timebomb hook uninstall --yes
+
+# Operate on a repository at a specific path
+timebomb hook install /path/to/repo
+```
+
+The hook block appended to (or created in) `.git/hooks/pre-commit`:
+
+```sh
+# BEGIN timebomb
+timebomb check --since HEAD .
+# END timebomb
+```
+
+If a `pre-commit` hook already exists, the block is **appended** and the existing content is preserved. Uninstalling removes only the timebomb block; other content is left intact. The hook file is deleted if it becomes empty after removal.
+
+### `trend` — Compare two report snapshots
+
+```bash
+# Compare an older report to a newer one
+timebomb trend report-2025-01.json report-2025-02.json
+
+# Output as JSON
+timebomb trend --format json report-2025-01.json report-2025-02.json
+
+# GitHub Actions format (shows ::error / ::notice annotations)
+timebomb trend --format github report-2025-01.json report-2025-02.json
+```
+
+`trend` reads two report JSON files produced by `timebomb report` and shows how annotation debt has changed between them:
+
+```
+Trend: 2025-01-01T00:00:00Z → 2025-02-01T00:00:00Z
+
+  Expired:       +2
+  Expiring soon: -1
+  Total:         +1
+
+  Newly expired (2):
+    src/auth/login.rs:42  TODO[2025-01-15]  remove legacy oauth flow
+    src/db/schema.sql:88  FIXME[2025-01-20]  drop temp_users table
+
+  Resolved (0):
+    (none)
+
+  Snoozed (0):
+    (none)
+```
+
+**Snoozed** annotations were expired in the baseline but now appear in the expiring-soon bucket, meaning the deadline was bumped without resolving the underlying issue.
 
 ---
 
@@ -164,6 +231,15 @@ OK       src/api/handler.rs:77          HACK[2099-01-01]      revisit when platf
 
 Scanned 142 file(s) · 17 annotation(s) total · 1 expired · 1 expiring soon · 15 ok
 ```
+
+When `--blame` is passed, the responsible developer is shown after the tag:
+
+```
+EXPIRED  src/auth/login.rs:42           TODO[2026-01-15] [~alice]   remove legacy oauth flow
+EXPIRED  src/db/schema.sql:108          FIXME[2026-04-01] [bob]     drop temp_users table
+```
+
+`[alice]` = explicit owner from the annotation bracket; `[~alice]` = inferred from git blame.
 
 Set the `NO_COLOR` environment variable to disable color output:
 
@@ -300,15 +376,24 @@ jobs:
 
 ### Pre-commit hook
 
+The easiest way to add a pre-commit hook is `timebomb hook install`:
+
 ```bash
-#!/bin/sh
-# .git/hooks/pre-commit
-timebomb check --warn-within 7d
+timebomb hook install --yes
 ```
 
-Make it executable:
+This creates (or appends to) `.git/hooks/pre-commit` with a shebang, `set -e`, and a `timebomb check` invocation. To remove it later:
 
 ```bash
+timebomb hook uninstall --yes
+```
+
+Or write the hook manually:
+
+```bash
+#!/bin/sh
+set -e
+timebomb check --warn-within 7d
 chmod +x .git/hooks/pre-commit
 ```
 
@@ -398,7 +483,16 @@ timebomb/
 │   ├── scanner.rs          # File walking + line scanning → Vec<Annotation>
 │   ├── annotation.rs       # Annotation struct, Status enum (Expired/ExpiringSoon/Ok)
 │   ├── output.rs           # Terminal, JSON, GitHub Actions formatters
-│   └── error.rs            # Error types and duration parsing
+│   ├── error.rs            # Error types and duration parsing
+│   ├── blame.rs            # git blame integration for --blame enrichment
+│   ├── hook.rs             # Pre-commit hook install / uninstall
+│   ├── trend.rs            # Report snapshot comparison (trend command)
+│   ├── report.rs           # Report JSON generation and writing
+│   ├── stats.rs            # Aggregate stats by owner / tag
+│   ├── init.rs             # timebomb init command
+│   ├── add.rs              # timebomb add command (insert annotations)
+│   ├── snooze.rs           # timebomb snooze command (bump deadlines)
+│   └── git.rs              # Git helpers (changed files, repo detection)
 ├── tests/
 │   ├── scanner_tests.rs    # Integration tests for the scanner
 │   ├── config_tests.rs     # Integration tests for config loading
@@ -440,6 +534,22 @@ No. It detects binary files by looking for null bytes in the first 8 KB and skip
 **Q: What happens if the date is malformed (e.g. `TODO[2026-13-45]`)?**
 
 timebomb prints a warning to stderr and skips that annotation. It does not crash.
+
+**Q: What does `--blame` do exactly?**
+
+When `--blame` is passed, timebomb runs `git blame --porcelain` on each file that has annotations without an explicit `[owner]` bracket. The commit author for that line is recorded as the inferred owner and shown as `[~author]` in terminal output and as `blamed_owner` in JSON. Explicit `[owner]` values are never overwritten. `--blame` is a no-op on files not tracked by git.
+
+**Q: Is `timebomb hook install` safe if I already have a pre-commit hook?**
+
+Yes. It appends the timebomb block to the existing file without touching any other content. The markers `# BEGIN timebomb` / `# END timebomb` make the block idempotent (installing twice only writes one block) and cleanly removable with `timebomb hook uninstall`.
+
+**Q: How do I track annotation debt over time with `trend`?**
+
+Run `timebomb report --output report-$(date +%Y-%m).json` on a schedule (e.g., weekly CI job) to produce snapshots. Then compare any two snapshots:
+
+```bash
+timebomb trend report-2025-01.json report-2025-02.json
+```
 
 ---
 

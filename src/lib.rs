@@ -1,9 +1,13 @@
 pub mod add;
 pub mod annotation;
+pub mod blame;
 pub mod cli;
 pub mod config;
 pub mod error;
 pub mod git;
+pub mod hook;
 pub mod output;
+pub mod report;
 pub mod scanner;
 pub mod stats;
+pub mod trend;

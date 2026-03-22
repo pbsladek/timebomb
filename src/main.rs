@@ -1,17 +1,20 @@
 use timebomb::add::run_add;
 use timebomb::annotation;
+use timebomb::blame::enrich_with_blame;
 use timebomb::config::{self, load_config, CliOverrides};
 use timebomb::error::{parse_duration_days, Error};
 use timebomb::git::{git_changed_files, is_git_repo};
+use timebomb::hook;
 use timebomb::output::{print_list, print_scan_result, OutputFormat};
 use timebomb::scanner::scan;
 use timebomb::stats::{compute_stats, print_stats};
+use timebomb::trend;
 
 use chrono::Local;
 use clap::Parser;
 use std::path::{Path, PathBuf};
 use std::process;
-use timebomb::cli::{Cli, Command};
+use timebomb::cli::{Cli, Command, HookCommand};
 
 fn main() {
     let cli = Cli::parse();
@@ -53,7 +56,12 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 None => OutputFormat::auto_detect(),
             };
 
-            let result = scan(&scan_path, &cfg, today)?;
+            let mut result = scan(&scan_path, &cfg, today)?;
+
+            if args.blame {
+                enrich_with_blame(&mut result.annotations, &scan_path);
+            }
+
             print_scan_result(&result, &format, cfg.warn_within_days);
 
             if result.has_expired() {
@@ -75,7 +83,11 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 None => OutputFormat::auto_detect(),
             };
 
-            let result = scan(&scan_path, &cfg, today)?;
+            let mut result = scan(&scan_path, &cfg, today)?;
+
+            if args.blame {
+                enrich_with_blame(&mut result.annotations, &scan_path);
+            }
 
             let annotations: Vec<&annotation::Annotation> = if args.expired {
                 result.expired()
@@ -122,6 +134,29 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             let stats = compute_stats(&result.annotations);
             print_stats(&stats, &format);
             Ok(0)
+        }
+
+        Command::Hook(args) => match args.command {
+            HookCommand::Install(a) => {
+                let path = canonicalize_path(Path::new(&a.path))?;
+                hook::run_hook_install(&path, a.yes)
+            }
+            HookCommand::Uninstall(a) => {
+                let path = canonicalize_path(Path::new(&a.path))?;
+                hook::run_hook_uninstall(&path, a.yes)
+            }
+        },
+
+        Command::Trend(args) => {
+            let format = match args.format {
+                Some(ref f) => f.to_output_format(),
+                None => OutputFormat::auto_detect(),
+            };
+            trend::run_trend(
+                Path::new(&args.report_a),
+                Path::new(&args.report_b),
+                &format,
+            )
         }
     }
 }

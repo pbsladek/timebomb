@@ -81,6 +81,17 @@ pub fn print_terminal(result: &ScanResult, warn_within_days: u32, show_ok: bool)
     }
 }
 
+/// Format the owner column: `[owner]` if explicit, `[~blame]` if inferred, empty otherwise.
+fn owner_display(ann: &Annotation) -> String {
+    if let Some(o) = &ann.owner {
+        format!(" [{}]", o)
+    } else if let Some(b) = &ann.blamed_owner {
+        format!(" [~{}]", b)
+    } else {
+        String::new()
+    }
+}
+
 fn print_annotation_terminal(
     ann: &Annotation,
     _warn_within_days: u32,
@@ -102,9 +113,11 @@ fn print_annotation_terminal(
     let tag_date = format!("{}[{}]", ann.tag, ann.date_str());
     let tag_date_col = format!("{:<20}", tag_date);
 
+    let owner_part = owner_display(ann);
+
     let line = format!(
-        "{} {}  {}  {}",
-        status_label, location, tag_date_col, ann.message
+        "{} {}  {}{}  {}",
+        status_label, location, tag_date_col, owner_part, ann.message
     );
 
     if use_color {
@@ -131,10 +144,7 @@ pub fn print_annotation_line_terminal(ann: &Annotation, use_color: bool) {
     let tag_date = format!("{}[{}]", ann.tag, ann.date_str());
     let tag_date_col = format!("{:<20}", tag_date);
 
-    let owner_part = match &ann.owner {
-        Some(o) => format!(" [{}]", o),
-        None => String::new(),
-    };
+    let owner_part = owner_display(ann);
 
     let line = format!(
         "{} {}  {}{}  {}",
@@ -173,6 +183,8 @@ pub struct JsonAnnotation<'a> {
     pub tag: &'a str,
     pub date: String,
     pub owner: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blamed_owner: Option<&'a str>,
     pub message: &'a str,
     pub status: &'a str,
 }
@@ -185,6 +197,7 @@ impl<'a> JsonAnnotation<'a> {
             tag: &ann.tag,
             date: ann.date_str(),
             owner: ann.owner.as_deref(),
+            blamed_owner: ann.blamed_owner.as_deref(),
             message: &ann.message,
             status: ann.status.as_str(),
         }
@@ -357,6 +370,7 @@ mod tests {
             owner: None,
             message: msg.to_string(),
             status,
+            blamed_owner: None,
         }
     }
 
@@ -375,6 +389,7 @@ mod tests {
             owner: Some(owner.to_string()),
             message: msg.to_string(),
             status,
+            blamed_owner: None,
         }
     }
 
@@ -553,5 +568,63 @@ mod tests {
         print_scan_result(&result, &OutputFormat::Terminal, 0);
         print_scan_result(&result, &OutputFormat::Json, 0);
         print_scan_result(&result, &OutputFormat::GitHub, 0);
+    }
+
+    // ── blamed_owner display ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_owner_display_explicit_owner() {
+        let ann = make_annotation_with_owner("TODO", "2020-01-01", Status::Expired, "msg", "alice");
+        assert_eq!(owner_display(&ann), " [alice]");
+    }
+
+    #[test]
+    fn test_owner_display_blamed_owner() {
+        let mut ann = make_annotation("TODO", "2020-01-01", Status::Expired, "msg");
+        ann.blamed_owner = Some("bob".to_string());
+        assert_eq!(owner_display(&ann), " [~bob]");
+    }
+
+    #[test]
+    fn test_owner_display_no_owner() {
+        let ann = make_annotation("TODO", "2020-01-01", Status::Expired, "msg");
+        assert_eq!(owner_display(&ann), "");
+    }
+
+    #[test]
+    fn test_owner_display_explicit_takes_precedence_over_blamed() {
+        // When both owner and blamed_owner are set, explicit owner wins.
+        let mut ann =
+            make_annotation_with_owner("TODO", "2020-01-01", Status::Expired, "msg", "alice");
+        ann.blamed_owner = Some("bob".to_string());
+        // Should show explicit owner, not blamed_owner.
+        assert_eq!(owner_display(&ann), " [alice]");
+    }
+
+    #[test]
+    fn test_json_annotation_includes_blamed_owner() {
+        let mut ann = make_annotation("TODO", "2020-01-01", Status::Expired, "msg");
+        ann.blamed_owner = Some("dave".to_string());
+        let j = JsonAnnotation::from_annotation(&ann);
+        assert_eq!(j.blamed_owner, Some("dave"));
+        assert_eq!(j.owner, None);
+    }
+
+    #[test]
+    fn test_json_annotation_blamed_owner_absent_when_none() {
+        let ann = make_annotation("TODO", "2020-01-01", Status::Expired, "msg");
+        let j = JsonAnnotation::from_annotation(&ann);
+        assert_eq!(j.blamed_owner, None);
+        // The field is skip_serializing_if = None, so it must not appear in the JSON string.
+        let json = serde_json::to_string(&j).unwrap();
+        assert!(!json.contains("blamed_owner"));
+    }
+
+    #[test]
+    fn test_print_annotation_line_terminal_with_blamed_owner() {
+        let mut ann = make_annotation("TODO", "2020-01-01", Status::Expired, "msg");
+        ann.blamed_owner = Some("eve".to_string());
+        // Should not panic; no assertion on stdout since we can't capture easily.
+        print_annotation_line_terminal(&ann, false);
     }
 }

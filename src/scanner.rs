@@ -239,6 +239,7 @@ pub fn scan_content(
                 owner,
                 message,
                 status,
+                blamed_owner: None,
             });
         }
     }
@@ -500,6 +501,7 @@ line 6
             owner: None,
             message: "expired".to_string(),
             status: Status::Expired,
+            blamed_owner: None,
         };
         let soon = Annotation {
             file: PathBuf::from("b.rs"),
@@ -509,6 +511,7 @@ line 6
             owner: None,
             message: "soon".to_string(),
             status: Status::ExpiringSoon,
+            blamed_owner: None,
         };
         let ok = Annotation {
             file: PathBuf::from("c.rs"),
@@ -518,6 +521,7 @@ line 6
             owner: None,
             message: "fine".to_string(),
             status: Status::Ok,
+            blamed_owner: None,
         };
         let _ = today_date; // used in test context, suppress warning
         let result = ScanResult {

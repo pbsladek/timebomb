@@ -252,6 +252,7 @@ mod tests {
             owner: owner.map(|s| s.to_string()),
             message: "test message".to_string(),
             status,
+            blamed_owner: None,
         }
     }
 

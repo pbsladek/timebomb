@@ -29,6 +29,12 @@ pub enum Command {
 
     /// Show annotation counts broken down by owner and tag
     Stats(StatsArgs),
+
+    /// Manage the git pre-commit hook
+    Hook(HookArgs),
+
+    /// Compare two report JSON snapshots and show annotation debt trajectory
+    Trend(TrendArgs),
 }
 
 /// Arguments for the `check` subcommand.
@@ -57,6 +63,10 @@ pub struct CheckArgs {
     /// Only report annotations touched in the git diff against this ref (e.g. "HEAD", "main")
     #[arg(long, value_name = "REF")]
     pub since: Option<String>,
+
+    /// Enrich annotations without an explicit owner with git blame author
+    #[arg(long)]
+    pub blame: bool,
 }
 
 /// Arguments for the `list` subcommand.
@@ -85,6 +95,10 @@ pub struct ListArgs {
     /// Path to config file (default: .timebomb.toml in scan root or cwd)
     #[arg(long, value_name = "FILE")]
     pub config: Option<String>,
+
+    /// Enrich annotations without an explicit owner with git blame author
+    #[arg(long)]
+    pub blame: bool,
 }
 
 /// Arguments for the `add` subcommand.
@@ -141,6 +155,46 @@ pub struct StatsArgs {
     /// Path to config file (default: .timebomb.toml in scan root or cwd)
     #[arg(long, value_name = "FILE")]
     pub config: Option<String>,
+}
+
+/// Arguments for the `hook` subcommand.
+#[derive(Debug, clap::Args)]
+pub struct HookArgs {
+    #[command(subcommand)]
+    pub command: HookCommand,
+}
+
+/// Subcommands under `hook`.
+#[derive(Debug, Subcommand)]
+pub enum HookCommand {
+    /// Install the timebomb git pre-commit hook
+    Install(HookInstallArgs),
+    /// Remove the timebomb git pre-commit hook
+    Uninstall(HookInstallArgs),
+}
+
+/// Arguments for `hook install` / `hook uninstall`.
+#[derive(Debug, clap::Args)]
+pub struct HookInstallArgs {
+    /// Path to the git repository root (default: current directory)
+    #[arg(default_value = ".")]
+    pub path: String,
+
+    /// Skip confirmation prompts
+    #[arg(short, long)]
+    pub yes: bool,
+}
+
+/// Arguments for the `trend` subcommand.
+#[derive(Debug, clap::Args)]
+pub struct TrendArgs {
+    /// Path to the earlier report JSON file (baseline)
+    pub report_a: String,
+    /// Path to the newer report JSON file (current)
+    pub report_b: String,
+    /// Output format
+    #[arg(long, value_name = "FORMAT")]
+    pub format: Option<FormatArg>,
 }
 
 /// The --by flag value for `stats`.
