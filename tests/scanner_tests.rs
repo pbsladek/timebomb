@@ -10,7 +10,19 @@ use std::path::{Path, PathBuf};
 // that lives outside src/. We use `timebomb` as the crate name.
 use timebomb::annotation::Status;
 use timebomb::config::Config;
-use timebomb::scanner::{build_regex, is_binary, scan, scan_content, scan_str};
+use timebomb::scanner::{build_regex, scan, scan_content};
+
+/// Convenience helper: scan an inline string with a freshly built regex.
+/// Mirrors the old `scan_str` function that is now `pub(crate)` (test-only).
+fn scan_str(
+    src: &str,
+    path: &Path,
+    cfg: &Config,
+    today: chrono::NaiveDate,
+) -> timebomb::error::Result<Vec<timebomb::annotation::Annotation>> {
+    let regex = build_regex(cfg)?;
+    scan_content(src, path, &regex, cfg, today)
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -586,45 +598,36 @@ fn test_file_path_stored_as_relative() {
 
 // ─── Binary file detection ────────────────────────────────────────────────────
 
+/// Verify that the full `scan()` pipeline skips binary files (null bytes) and
+/// scans text files — covers the inline binary detection in Phase 2.
 #[test]
-fn test_is_binary_returns_false_for_text_fixture() {
-    let path = fixture_path("sample.rs");
-    assert!(
-        !is_binary(&path).unwrap(),
-        "sample.rs should not be detected as binary"
-    );
-}
-
-#[test]
-fn test_is_binary_returns_false_for_sql_fixture() {
-    let path = fixture_path("sample.sql");
-    assert!(
-        !is_binary(&path).unwrap(),
-        "sample.sql should not be detected as binary"
-    );
-}
-
-#[test]
-fn test_is_binary_returns_true_for_null_bytes() {
+fn test_scan_skips_binary_files() {
     use std::io::Write;
-    let mut f = tempfile::NamedTempFile::new().unwrap();
-    // Write some null bytes mixed with text
-    f.write_all(b"hello\x00world").unwrap();
-    assert!(
-        is_binary(f.path()).unwrap(),
-        "file with null bytes must be detected as binary"
-    );
-}
+    let dir = tempfile::tempdir().unwrap();
 
-#[test]
-fn test_is_binary_returns_false_for_all_ascii() {
-    use std::io::Write;
-    let mut f = tempfile::NamedTempFile::new().unwrap();
-    writeln!(f, "// TODO[2020-01-01]: ascii only file").unwrap();
-    assert!(
-        !is_binary(f.path()).unwrap(),
-        "pure ASCII file must not be detected as binary"
+    // A text file with an annotation — should be scanned.
+    let mut text = std::fs::File::create(dir.path().join("ok.rs")).unwrap();
+    writeln!(text, "// TODO[2020-01-01]: expired annotation").unwrap();
+
+    // A binary file (contains null byte) — should be skipped.
+    let mut bin = std::fs::File::create(dir.path().join("blob.bin")).unwrap();
+    bin.write_all(b"ELF\x00binary\x00data").unwrap();
+
+    let cfg = Config {
+        extensions: vec!["rs".to_string(), "bin".to_string()],
+        ..Config::default()
+    };
+    let result = scan(dir.path(), &cfg, today()).unwrap();
+
+    assert_eq!(
+        result.scanned_files, 1,
+        "only the text file should be scanned"
     );
+    assert_eq!(
+        result.skipped_files, 1,
+        "the binary file should be counted as skipped"
+    );
+    assert_eq!(result.annotations.len(), 1);
 }
 
 // ─── Custom tag configuration ─────────────────────────────────────────────────

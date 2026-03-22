@@ -54,9 +54,9 @@ fn run_git_diff(repo_root: &Path, git_ref: &str, cached: bool) -> Result<HashSet
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         if stderr.to_lowercase().contains("not a git repository") {
-            return Err(Error::InvalidArgument(format!(
-                "git diff failed: not a git repository"
-            )));
+            return Err(Error::InvalidArgument(
+                "git diff failed: not a git repository".to_string(),
+            ));
         }
         return Err(Error::InvalidArgument(format!(
             "invalid git ref '{}': {}",
@@ -69,7 +69,7 @@ fn run_git_diff(repo_root: &Path, git_ref: &str, cached: bool) -> Result<HashSet
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
-        .map(|l| PathBuf::from(l))
+        .map(PathBuf::from)
         .collect();
 
     Ok(paths)

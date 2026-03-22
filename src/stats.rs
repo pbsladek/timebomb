@@ -160,12 +160,12 @@ pub fn print_stats_terminal(result: &StatsResult) {
     for row in &result.by_owner {
         let name = truncate_name(&row.owner);
         println!(
-            "{:<20}{:>8}{}{}{}",
+            "{:<20}{:>8}{}{:>8}{:>8}",
             name,
             row.total,
             fmt_expired(row.expired, use_color),
-            format!("{:>8}", row.expiring_soon),
-            format!("{:>8}", row.ok),
+            row.expiring_soon,
+            row.ok,
         );
     }
 
@@ -181,12 +181,12 @@ pub fn print_stats_terminal(result: &StatsResult) {
     for row in &result.by_tag {
         let name = truncate_name(&row.tag);
         println!(
-            "{:<20}{:>8}{}{}{}",
+            "{:<20}{:>8}{}{:>8}{:>8}",
             name,
             row.total,
             fmt_expired(row.expired, use_color),
-            format!("{:>8}", row.expiring_soon),
-            format!("{:>8}", row.ok),
+            row.expiring_soon,
+            row.ok,
         );
     }
 

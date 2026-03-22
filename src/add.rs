@@ -80,6 +80,7 @@ use std::path::PathBuf;
 /// - `yes`      — skip confirmation prompt when `true`
 /// - `message`  — annotation message text
 /// - `today`    — the current date (injected for testability)
+#[allow(clippy::too_many_arguments)]
 pub fn run_add(
     target: &str,
     tag: &str,

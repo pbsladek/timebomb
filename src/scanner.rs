@@ -2,10 +2,10 @@ use crate::annotation::Annotation;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use chrono::NaiveDate;
-use globset::GlobSet;
 use rayon::prelude::*;
 use regex::Regex;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use walkdir::WalkDir;
 
 /// Result of a full scan run.
@@ -74,7 +74,13 @@ pub fn scan(root: &Path, config: &Config, today: NaiveDate) -> Result<ScanResult
     for entry in WalkDir::new(root)
         .follow_links(false)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(|e| match e {
+            Ok(entry) => Some(entry),
+            Err(err) => {
+                eprintln!("warning: skipping inaccessible path: {}", err);
+                None
+            }
+        })
     {
         if !entry.file_type().is_file() {
             continue;
@@ -89,7 +95,7 @@ pub fn scan(root: &Path, config: &Config, today: NaiveDate) -> Result<ScanResult
             .to_path_buf();
 
         // Skip excluded paths.
-        if is_excluded(&rel_path, &globset) {
+        if config.is_excluded(&rel_path, &globset) {
             skipped_files += 1;
             continue;
         }
@@ -106,27 +112,40 @@ pub fn scan(root: &Path, config: &Config, today: NaiveDate) -> Result<ScanResult
             }
         }
 
-        // Skip binary files (reads at most 8 KB — cheap gatekeeper).
-        if is_binary(&abs_path)? {
-            skipped_files += 1;
-            continue;
-        }
-
         candidates.push(Candidate { abs_path, rel_path });
     }
 
-    let scanned_files = candidates.len();
-
     // ----------------------------------------------------------------
     // Phase 2 (parallel): Scan each candidate file on a rayon thread-
-    // pool worker.  Every `scan_file` call is pure — it reads one file
-    // and returns owned data — so no shared mutable state or locks are
-    // needed.
+    // pool worker.  Each worker reads the file once as raw bytes,
+    // performs binary detection inline (no second open), then decodes
+    // and scans.  Binary skips are counted via an atomic so Phase 1
+    // stays free of file I/O.
     // ----------------------------------------------------------------
+    let binary_count = AtomicUsize::new(0);
     let results: Result<Vec<Vec<Annotation>>> = candidates
         .par_iter()
-        .map(|c| scan_file(&c.abs_path, &c.rel_path, &regex, config, today))
+        .map(|c| {
+            let bytes = std::fs::read(&c.abs_path).map_err(|e| Error::Io {
+                source: e,
+                path: Some(c.abs_path.clone()),
+            })?;
+            // Binary detection: a null byte means this is not a text file.
+            if bytes.contains(&0u8) {
+                binary_count.fetch_add(1, Ordering::Relaxed);
+                return Ok(vec![]);
+            }
+            // Non-UTF-8 bytes are replaced with U+FFFD — intentional; binary
+            // files are already rejected above by the null-byte check.
+            let content = String::from_utf8_lossy(&bytes);
+            scan_content(&content, &c.rel_path, &regex, config, today)
+        })
         .collect();
+
+    let binary_skipped = binary_count.load(Ordering::Relaxed);
+    skipped_files += binary_skipped;
+    // scanned_files = candidates that passed Phase 1 minus those found binary in Phase 2.
+    let scanned_files = candidates.len() - binary_skipped;
 
     // ----------------------------------------------------------------
     // Phase 3 (serial): Flatten the per-file annotation lists, then
@@ -134,7 +153,9 @@ pub fn scan(root: &Path, config: &Config, today: NaiveDate) -> Result<ScanResult
     // items appear first.
     // ----------------------------------------------------------------
     let mut annotations: Vec<Annotation> = results?.into_iter().flatten().collect();
-    annotations.sort_by_key(|a| a.date);
+    // Unstable sort is faster — NaiveDate is Copy and there is no meaningful
+    // tiebreaker for equal dates, so stability adds cost for free.
+    annotations.sort_unstable_by_key(|a| a.date);
 
     Ok(ScanResult {
         annotations,
@@ -146,6 +167,9 @@ pub fn scan(root: &Path, config: &Config, today: NaiveDate) -> Result<ScanResult
 /// Scan a single file and return all annotations found.
 ///
 /// `abs_path` is used for reading; `rel_path` is stored in the `Annotation` for display.
+/// Binary files (detected via null-byte check) return an empty vec.
+/// Non-UTF-8 bytes are replaced with U+FFFD — intentional; binary files are
+/// already rejected by the null-byte check.
 pub fn scan_file(
     abs_path: &Path,
     rel_path: &Path,
@@ -153,11 +177,14 @@ pub fn scan_file(
     config: &Config,
     today: NaiveDate,
 ) -> Result<Vec<Annotation>> {
-    let content = std::fs::read_to_string(abs_path).map_err(|e| Error::Io {
+    let bytes = std::fs::read(abs_path).map_err(|e| Error::Io {
         source: e,
         path: Some(abs_path.to_path_buf()),
     })?;
-
+    if bytes.contains(&0u8) {
+        return Ok(vec![]);
+    }
+    let content = String::from_utf8_lossy(&bytes);
     scan_content(&content, rel_path, regex, config, today)
 }
 
@@ -172,15 +199,19 @@ pub fn scan_content(
     let mut annotations = Vec::new();
 
     for (line_idx, line) in content.lines().enumerate() {
+        // Fast byte pre-filter: every valid annotation contains '['.
+        // Skips the regex engine entirely for the vast majority of lines.
+        if !line.contains('[') {
+            continue;
+        }
+
         let line_number = line_idx + 1; // 1-based
 
         for caps in regex.captures_iter(line) {
-            let tag = caps[1].to_uppercase();
             let date_str = &caps[2];
-            let owner = caps.get(4).map(|m| m.as_str().trim().to_string());
-            let message = caps[5].trim().to_string();
 
-            // Parse the date; warn on invalid but don't crash
+            // Parse the date before any heap allocation — on an invalid date
+            // the three allocations below are avoided entirely.
             let date = match NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
                 Ok(d) => d,
                 Err(_) => {
@@ -193,6 +224,10 @@ pub fn scan_content(
                     continue;
                 }
             };
+
+            let tag = caps[1].to_uppercase();
+            let owner = caps.get(4).map(|m| m.as_str().trim().to_string());
+            let message = caps[5].trim().to_string();
 
             let status = Annotation::compute_status(date, today, config.warn_within_days);
 
@@ -218,39 +253,30 @@ pub fn build_regex(config: &Config) -> Result<Regex> {
 }
 
 /// Detect binary files by looking for null bytes in the first 8 KB.
-pub fn is_binary(path: &Path) -> Result<bool> {
+///
+/// Retained for unit testing. Not called in the scan pipeline — Phase 2 of
+/// `scan()` performs inline binary detection as part of the single `fs::read`
+/// call, avoiding a double file open.
+#[cfg(test)]
+pub(crate) fn is_binary(path: &Path) -> Result<bool> {
     use std::io::Read;
-    let f = std::fs::File::open(path).map_err(|e| Error::Io {
+    let mut f = std::fs::File::open(path).map_err(|e| Error::Io {
         source: e,
         path: Some(path.to_path_buf()),
     })?;
-    let mut reader = std::io::BufReader::new(f);
     let mut buf = [0u8; 8192];
-    let n = reader.read(&mut buf).map_err(|e| Error::Io {
+    // BufReader adds overhead for a single fixed-size read; use File directly.
+    let n = f.read(&mut buf).map_err(|e| Error::Io {
         source: e,
         path: Some(path.to_path_buf()),
     })?;
     Ok(buf[..n].contains(&0u8))
 }
 
-/// Check whether a relative path matches any exclude glob.
-fn is_excluded(rel_path: &Path, globset: &GlobSet) -> bool {
-    if globset.is_match(rel_path) {
-        return true;
-    }
-    // Also match against each path component prefix so that
-    // patterns like `node_modules/**` match deeply nested files.
-    if let Some(fname) = rel_path.file_name() {
-        if globset.is_match(Path::new(fname)) {
-            return true;
-        }
-    }
-    false
-}
-
 /// Convenience: scan a string with a freshly built regex.
 /// Useful for testing and one-off scanning without a filesystem walk.
-pub fn scan_str(
+#[cfg(test)]
+pub(crate) fn scan_str(
     content: &str,
     rel_path: &Path,
     config: &Config,

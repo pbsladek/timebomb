@@ -6,10 +6,16 @@ use std::path::PathBuf;
 #[derive(Debug)]
 pub enum Error {
     /// I/O error with optional path context
-    Io { source: io::Error, path: Option<PathBuf> },
+    Io {
+        source: io::Error,
+        path: Option<PathBuf>,
+    },
 
     /// Failed to parse the config file
-    ConfigParse { source: toml::de::Error, path: PathBuf },
+    ConfigParse {
+        source: toml::de::Error,
+        path: PathBuf,
+    },
 
     /// Config file could not be read
     ConfigRead { source: io::Error, path: PathBuf },
@@ -18,10 +24,17 @@ pub enum Error {
     RegexCompile(regex::Error),
 
     /// A date string in an annotation was not a valid calendar date
-    InvalidDate { date_str: String, file: PathBuf, line: usize },
+    InvalidDate {
+        date_str: String,
+        file: PathBuf,
+        line: usize,
+    },
 
     /// A glob pattern in the config was invalid
-    InvalidGlob { pattern: String, source: globset::Error },
+    InvalidGlob {
+        pattern: String,
+        source: globset::Error,
+    },
 
     /// A CLI argument was semantically invalid (e.g. bad duration string)
     InvalidArgument(String),
@@ -30,7 +43,10 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Io { source, path: Some(p) } => {
+            Error::Io {
+                source,
+                path: Some(p),
+            } => {
                 write!(f, "I/O error reading '{}': {}", p.display(), source)
             }
             Error::Io { source, path: None } => {
@@ -45,7 +61,11 @@ impl fmt::Display for Error {
             Error::RegexCompile(e) => {
                 write!(f, "Regex compilation error: {}", e)
             }
-            Error::InvalidDate { date_str, file, line } => {
+            Error::InvalidDate {
+                date_str,
+                file,
+                line,
+            } => {
                 write!(
                     f,
                     "Invalid date '{}' at {}:{} (expected YYYY-MM-DD)",
