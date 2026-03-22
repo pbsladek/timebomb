@@ -1,0 +1,61 @@
+# timebomb configuration file
+# Place this file in the root of your project.
+#
+# All fields are optional — omitting a field uses the built-in default.
+
+# Tags to scan for. Only annotations whose tag appears in this list will be
+# reported. Tags are matched case-insensitively, but stored uppercased.
+#
+# Default: ["TODO", "FIXME", "HACK", "TEMP", "REMOVEME"]
+tags = ["TODO", "FIXME", "HACK", "TEMP", "REMOVEME"]
+
+# Warn (and optionally fail with --fail-on-warn) if an annotation's deadline
+# is within this many days. Set to 0 to disable warnings.
+#
+# Default: 0
+warn_within_days = 14
+
+# Glob patterns for paths to exclude from scanning. Patterns are matched
+# against the path relative to the scan root. Use ** for recursive matching.
+#
+# Default: ["vendor/**", "node_modules/**", "*.min.js", ".git/**"]
+exclude = [
+  "vendor/**",
+  "node_modules/**",
+  "*.min.js",
+  ".git/**",
+  "target/**",
+  "dist/**",
+  "build/**",
+]
+
+# File extensions to scan. If this list is empty, timebomb will attempt to
+# scan all files that aren't detected as binary (i.e. contain no null bytes
+# in the first 8 KB). Add or remove extensions to match your tech stack.
+#
+# Default: ["rs", "go", "ts", "js", "py", "rb", "java", "sql", "tf", "yaml", "yml"]
+extensions = [
+  "rs",
+  "go",
+  "ts",
+  "js",
+  "py",
+  "rb",
+  "java",
+  "sql",
+  "tf",
+  "yaml",
+  "yml",
+  "toml",
+  "sh",
+  "bash",
+  "zsh",
+  "md",
+  "swift",
+  "kt",
+  "scala",
+  "cs",
+  "cpp",
+  "c",
+  "h",
+]

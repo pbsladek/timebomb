@@ -1,0 +1,180 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+            ${{ runner.os }}-cargo-
+
+      - name: Build (debug)
+        run: cargo build --verbose
+
+      - name: Run tests
+        run: cargo test --verbose
+
+  clippy:
+    name: Clippy Lints
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable) with clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-clippy-
+            ${{ runner.os }}-cargo-
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable) with rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  build-release:
+    name: Release Build
+    runs-on: ubuntu-latest
+    needs: [ test, clippy ]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+            ${{ runner.os }}-cargo-
+
+      - name: Build (release)
+        run: cargo build --release --verbose
+
+      - name: Smoke test — check subcommand exits 0 on empty directory
+        run: |
+          mkdir -p /tmp/smoke-empty
+          ./target/release/timebomb check /tmp/smoke-empty
+
+      - name: Smoke test — list subcommand always exits 0
+        run: |
+          mkdir -p /tmp/smoke-list
+          echo "// TODO[2020-01-01]: expired annotation" > /tmp/smoke-list/test.rs
+          ./target/release/timebomb list /tmp/smoke-list
+
+      - name: Smoke test — check exits 1 when expired annotation found
+        run: |
+          mkdir -p /tmp/smoke-expired
+          echo "// TODO[2020-01-01]: this is expired" > /tmp/smoke-expired/main.rs
+          ./target/release/timebomb check /tmp/smoke-expired && exit 1 || true
+
+      - name: Smoke test — JSON output is valid JSON
+        run: |
+          mkdir -p /tmp/smoke-json
+          echo "// FIXME[2020-01-01]: old" > /tmp/smoke-json/lib.rs
+          ./target/release/timebomb check /tmp/smoke-json --format json | python3 -m json.tool > /dev/null
+
+      - name: Smoke test — GitHub Actions format produces workflow commands
+        run: |
+          mkdir -p /tmp/smoke-gh
+          echo "// TODO[2020-01-01]: expired annotation" > /tmp/smoke-gh/main.rs
+          output=$(./target/release/timebomb check /tmp/smoke-gh --format github || true)
+          echo "$output" | grep -q "::error" || (echo "Expected ::error annotation" && exit 1)
+
+  self-check:
+    name: Self Check (timebomb scans itself)
+    runs-on: ubuntu-latest
+    needs: [ build-release ]
+    # This job uses timebomb to scan its own source tree.
+    # It is informational — we warn but don't fail the build here,
+    # since the repo deliberately contains past-dated fixture annotations.
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+            ${{ runner.os }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Run timebomb check on src/ (GitHub Actions format)
+        run: |
+          ./target/release/timebomb check ./src --format github || true
+
+      - name: List all annotations in src/ sorted by date
+        run: |
+          ./target/release/timebomb list ./src || true
