@@ -217,10 +217,7 @@ fn test_load_config_wrong_type_returns_error() {
     // fuse_days should be an integer, not a string
     let dir = write_config(r#"fuse_days = "fourteen""#);
     let result = load_config(dir.path(), &no_overrides());
-    assert!(
-        result.is_err(),
-        "wrong type for fuse_days should error"
-    );
+    assert!(result.is_err(), "wrong type for fuse_days should error");
 }
 
 // ─── CLI overrides ────────────────────────────────────────────────────────────
@@ -230,10 +227,7 @@ fn test_cli_override_fuse_overrides_file() {
     let dir = write_config("fuse_days = 7\n");
     let overrides = CliOverrides::new(Some("30d".to_string()), false);
     let cfg = load_config(dir.path(), &overrides).unwrap();
-    assert_eq!(
-        cfg.fuse_days, 30,
-        "CLI --fuse should override config file"
-    );
+    assert_eq!(cfg.fuse_days, 30, "CLI --fuse should override config file");
 }
 
 #[test]

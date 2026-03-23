@@ -825,7 +825,13 @@ mod tests {
         let old_report = make_report(vec![], vec![], vec![]);
         write_report(&old_report, &out_path).unwrap();
 
-        let fuses = vec![make_fuse("src/b.rs", 99, "FIXME", "2099-12-01", Status::Inert)];
+        let fuses = vec![make_fuse(
+            "src/b.rs",
+            99,
+            "FIXME",
+            "2099-12-01",
+            Status::Inert,
+        )];
         let result = make_scan_result(fuses);
 
         let code = run_report(

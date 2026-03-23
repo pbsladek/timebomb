@@ -22,10 +22,7 @@ impl ScanResult {
     }
 
     pub fn ticking(&self) -> Vec<&Fuse> {
-        self.fuses
-            .iter()
-            .filter(|a| a.is_ticking())
-            .collect()
+        self.fuses.iter().filter(|a| a.is_ticking()).collect()
     }
 
     pub fn inert(&self) -> Vec<&Fuse> {

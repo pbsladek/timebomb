@@ -313,14 +313,7 @@ fn test_cli_bunker_save_with_path_and_fuse() {
     use clap::Parser;
     use timebomb::cli::{BaselineCommand, Command};
 
-    let cli = Cli::parse_from([
-        "timebomb",
-        "bunker",
-        "save",
-        "./src",
-        "--fuse",
-        "14d",
-    ]);
+    let cli = Cli::parse_from(["timebomb", "bunker", "save", "./src", "--fuse", "14d"]);
     match cli.command {
         Command::Bunker(args) => match args.command {
             BaselineCommand::Save(a) => {

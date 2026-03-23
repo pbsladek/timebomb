@@ -1,8 +1,8 @@
 use chrono::NaiveDate;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use std::time::Duration;
 use std::io::Write;
 use std::path::Path;
+use std::time::Duration;
 use tempfile::{NamedTempFile, TempDir};
 use timebomb::config::{CliOverrides, Config};
 use timebomb::diff::parse_unified_diff;

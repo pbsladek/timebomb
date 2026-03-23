@@ -100,12 +100,7 @@ fn owner_display(fuse: &Fuse) -> String {
     }
 }
 
-fn print_fuse_terminal(
-    fuse: &Fuse,
-    _fuse_days: u32,
-    use_color: bool,
-    show_ok: bool,
-) {
+fn print_fuse_terminal(fuse: &Fuse, _fuse_days: u32, use_color: bool, show_ok: bool) {
     // Skip inert items unless explicitly requested
     if fuse.status == Status::Inert && !show_ok {
         // Still show them in list mode
@@ -248,10 +243,7 @@ pub fn print_json(result: &ScanResult) {
 
 /// Serialize a slice of fuses as a JSON array (used by `manifest --format json`).
 pub fn print_json_list(fuses: &[&Fuse]) {
-    let items: Vec<JsonFuse> = fuses
-        .iter()
-        .map(|f| JsonFuse::from_fuse(f))
-        .collect();
+    let items: Vec<JsonFuse> = fuses.iter().map(|f| JsonFuse::from_fuse(f)).collect();
 
     match serde_json::to_string_pretty(&items) {
         Ok(json) => println!("{}", json),
@@ -330,12 +322,7 @@ pub fn print_scan_result(result: &ScanResult, format: &OutputFormat, fuse_days: 
 }
 
 /// Top-level dispatch for the `manifest` subcommand.
-pub fn print_list(
-    fuses: &[&Fuse],
-    format: &OutputFormat,
-    fuse_days: u32,
-    scan_root: &Path,
-) {
+pub fn print_list(fuses: &[&Fuse], format: &OutputFormat, fuse_days: u32, scan_root: &Path) {
     let _ = scan_root; // available for future use (e.g. relative path display)
     let use_color = color_enabled();
 
@@ -474,19 +461,19 @@ mod tests {
     #[test]
     fn test_print_github_detonated_format() {
         // Capture via manual construction; we just verify no panic and check format logic
-        let fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "remove legacy oauth");
+        let fuse = make_fuse(
+            "TODO",
+            "2020-01-01",
+            Status::Detonated,
+            "remove legacy oauth",
+        );
         // No panic
         print_fuse_github(&fuse, 14);
     }
 
     #[test]
     fn test_print_github_ticking_format() {
-        let fuse = make_fuse(
-            "FIXME",
-            "2025-06-10",
-            Status::Ticking,
-            "fix before release",
-        );
+        let fuse = make_fuse("FIXME", "2025-06-10", Status::Ticking, "fix before release");
         print_fuse_github(&fuse, 14);
     }
 
@@ -535,8 +522,13 @@ mod tests {
 
     #[test]
     fn test_print_fuse_line_terminal_with_owner() {
-        let fuse =
-            make_fuse_with_owner("TODO", "2020-01-01", Status::Detonated, "remove me", "alice");
+        let fuse = make_fuse_with_owner(
+            "TODO",
+            "2020-01-01",
+            Status::Detonated,
+            "remove me",
+            "alice",
+        );
         // Should not panic
         print_fuse_line_terminal(&fuse, false);
     }
@@ -561,7 +553,12 @@ mod tests {
     #[test]
     fn test_print_list_github_does_not_panic() {
         let fuse = make_fuse("HACK", "2020-01-01", Status::Detonated, "github list");
-        print_list(&[&fuse], &OutputFormat::GitHub, 0, std::path::Path::new("."));
+        print_list(
+            &[&fuse],
+            &OutputFormat::GitHub,
+            0,
+            std::path::Path::new("."),
+        );
     }
 
     #[test]

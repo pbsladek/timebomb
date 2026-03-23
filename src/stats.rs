@@ -47,7 +47,10 @@ pub fn compute_stats(fuses: &[Fuse]) -> StatsResult {
     let mut total_inert = 0usize;
 
     for fuse in fuses {
-        let owner_key = fuse.owner.clone().unwrap_or_else(|| "(unowned)".to_string());
+        let owner_key = fuse
+            .owner
+            .clone()
+            .unwrap_or_else(|| "(unowned)".to_string());
 
         total_fuses += 1;
 
@@ -200,10 +203,7 @@ pub fn print_stats_terminal(result: &StatsResult) {
     println!();
     println!(
         "{} fuse(s) total · {} detonated · {} ticking · {} inert",
-        result.total_fuses,
-        result.total_detonated,
-        result.total_ticking,
-        result.total_inert,
+        result.total_fuses, result.total_detonated, result.total_ticking, result.total_inert,
     );
 }
 

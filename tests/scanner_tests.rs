@@ -618,10 +618,7 @@ fn test_scan_skips_binary_files() {
     };
     let result = scan(dir.path(), &cfg, today()).unwrap();
 
-    assert_eq!(
-        result.swept_files, 1,
-        "only the text file should be swept"
-    );
+    assert_eq!(result.swept_files, 1, "only the text file should be swept");
     assert_eq!(
         result.skipped_files, 1,
         "the binary file should be counted as skipped"
@@ -707,8 +704,5 @@ fn test_scan_result_total_equals_sum_of_parts() {
 
     let total = result.total();
     let sum = result.detonated().len() + result.ticking().len() + result.inert().len();
-    assert_eq!(
-        total, sum,
-        "total() must equal detonated + ticking + inert"
-    );
+    assert_eq!(total, sum, "total() must equal detonated + ticking + inert");
 }
