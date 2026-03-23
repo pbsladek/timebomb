@@ -249,15 +249,12 @@ pub fn resolve_new_date(
 ///
 /// Only the FIRST bracketed date is replaced (the expiry date), not any
 /// subsequent bracket (e.g. an owner bracket like `[alice]`).
-fn date_bracket_re() -> &'static regex::Regex {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| {
-        regex::Regex::new(r"\[(\d{4}-\d{2}-\d{2})\]").expect("hardcoded regex is valid")
-    })
-}
+static DATE_BRACKET_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"\[(\d{4}-\d{2}-\d{2})\]").expect("hardcoded regex is valid")
+});
 
 pub fn snooze_line(line: &str, new_date: NaiveDate) -> Option<String> {
-    let re = date_bracket_re();
+    let re = &*DATE_BRACKET_RE;
 
     let mat = re.find(line)?;
 

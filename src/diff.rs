@@ -77,16 +77,12 @@ fn run_git_diff_lines(
 ///   - range = `new_start..=(new_start + new_count - 1)`
 ///
 /// `/dev/null` as the `+++` target means file deleted — skip.
-fn hunk_re() -> &'static regex::Regex {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| {
-        regex::Regex::new(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
-            .expect("hardcoded regex is valid")
-    })
-}
+static HUNK_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@").expect("hardcoded regex is valid")
+});
 
 pub fn parse_unified_diff(output: &str) -> HashMap<PathBuf, Vec<RangeInclusive<usize>>> {
-    let hunk_re = hunk_re();
+    let hunk_re = &*HUNK_RE;
 
     let mut result: HashMap<PathBuf, Vec<RangeInclusive<usize>>> = HashMap::new();
     let mut current_file: Option<PathBuf> = None;

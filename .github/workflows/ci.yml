@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install stable toolchain
         run: |
           set -euo pipefail
@@ -35,14 +35,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install stable toolchain
         run: |
           set -euo pipefail
           rustup update stable
           rustup default stable
           rustup component add clippy
-      - uses: actions/cache@6849a6489940f00c2f30cb149f03af631c37399 # v4.1.2
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             ~/.cargo/registry/index/
@@ -54,17 +54,17 @@ jobs:
             ${{ runner.os }}-cargo-clippy-
             ${{ runner.os }}-cargo-
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install stable toolchain
         run: rustup update stable && rustup default stable
-      - uses: actions/cache@6849a6489940f00c2f30cb149f03af631c37399 # v4.1.2
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             ~/.cargo/registry/index/
@@ -77,17 +77,17 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Run unit tests (lib + bins only)
         # --lib --bins runs only the inline #[cfg(test)] modules, not tests/
-        run: cargo test --lib --bins --verbose
+        run: cargo test --locked --lib --bins --verbose
 
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install stable toolchain
         run: rustup update stable && rustup default stable
-      - uses: actions/cache@6849a6489940f00c2f30cb149f03af631c37399 # v4.1.2
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             ~/.cargo/registry/index/
@@ -100,7 +100,7 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Run integration tests (tests/ directory)
         # --tests runs only the files under tests/ (scanner_tests, config_tests)
-        run: cargo test --tests --verbose
+        run: cargo test --locked --tests --verbose
 
   smoke-tests:
     name: Smoke Tests
@@ -108,10 +108,10 @@ jobs:
     timeout-minutes: 20
     needs: [unit-tests, integration-tests, clippy]
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install stable toolchain
         run: rustup update stable && rustup default stable
-      - uses: actions/cache@6849a6489940f00c2f30cb149f03af631c37399 # v4.1.2
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: |
             ~/.cargo/registry/index/
@@ -156,31 +156,29 @@ jobs:
           echo "// TODO[2020-01-01]: expired annotation" > "${{ runner.temp }}/smoke-gh/main.rs"
           output=$(./target/release/timebomb check "${{ runner.temp }}/smoke-gh" --format github || true)
           echo "$output" | grep -q "::error" || (echo "Expected ::error annotation" && exit 1)
+      - name: Upload release binary
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: timebomb-release-binary
+          path: target/release/timebomb
+          retention-days: 1
 
   self-check:
     name: Self Check (timebomb scans itself)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     needs: [smoke-tests]
     # Informational only — fixture files contain deliberately past-dated annotations.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Install stable toolchain
-        run: rustup update stable && rustup default stable
-      - uses: actions/cache@6849a6489940f00c2f30cb149f03af631c37399 # v4.1.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Download release binary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-smoke-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-smoke-
-            ${{ runner.os }}-cargo-
-      - name: Build release binary
-        run: cargo build --release
+          name: timebomb-release-binary
+          path: target/release/
+      - name: Make binary executable
+        run: chmod +x target/release/timebomb
       - name: Scan src/ with GitHub Actions format
         run: ./target/release/timebomb check ./src --format github || true
       - name: List all annotations sorted by date

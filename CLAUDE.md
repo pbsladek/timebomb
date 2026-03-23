@@ -30,17 +30,32 @@ All four commands must pass cleanly before any PR is merged. There is no separat
 ```
 src/
   main.rs        CLI entrypoint; resolve_config(); subcommand dispatch; exit codes
-  cli.rs         clap derive structs: Cli, CheckArgs, ListArgs, FormatArg
+  cli.rs         clap derive structs: Cli, CheckArgs, ListArgs, FixArgs, BaselineArgs, FormatArg
   config.rs      .timebomb.toml loading, CLI overlay merging, glob exclusion, extension filter
   scanner.rs     scan(), scan_file(), scan_content(), build_regex(), is_binary()
   annotation.rs  Annotation struct, Status enum, compute_status()
   output.rs      Terminal / JSON / GitHub Actions formatters
   error.rs       Error enum, Result alias, parse_duration_days()
+  blame.rs       git blame integration for --blame enrichment
+  hook.rs        Pre-commit hook install / uninstall
+  trend.rs       Report snapshot comparison (trend command)
+  report.rs      Report JSON generation and writing
+  stats.rs       Aggregate stats by owner / tag
+  init.rs        timebomb init command
+  add.rs         timebomb add command (insert annotations)
+  snooze.rs      timebomb snooze command (bump deadlines in-place)
+  fix.rs         timebomb fix command (interactive expired annotation resolution)
+  diff.rs        Unified diff parsing for --changed mode
+  baseline.rs    Baseline save/show/ratchet enforcement
+  git.rs         Git helpers (validate_git_ref, changed files, repo detection)
   lib.rs         Public re-exports (makes src/ importable from tests/)
 
 tests/
   scanner_tests.rs    Integration tests against fixture files
   config_tests.rs     Integration tests for config loading and merging
+  fix_tests.rs        Integration tests for the fix command
+  diff_tests.rs       Integration tests for diff parsing / --changed mode
+  baseline_tests.rs   Integration tests for baseline ratchet enforcement
   fixtures/
     sample.rs         Rust source with known mix of expired/expiring-soon/future annotations
     sample.py         Python source, same mix
@@ -58,6 +73,8 @@ tests/
 ### Regex compiled once
 
 `build_regex(config)` is called once in `scan()` before the walk loop. The resulting `Regex` is `Send + Sync` and is shared (by reference) across all rayon worker threads. Never compile the regex inside `scan_file` or `scan_content`.
+
+Helper regexes used in other modules (`snooze.rs`, `diff.rs`) are cached as `std::sync::LazyLock<Regex>` statics (stable since 1.80) so they are compiled at most once per process.
 
 ### Three-phase scan pipeline
 
@@ -84,10 +101,22 @@ CLI flags (e.g. `--warn-within`, `--fail-on-warn`) are applied on top as `CliOve
 | Code | Meaning |
 |------|---------|
 | 0 | No expired annotations |
-| 1 | One or more expired annotations found (or `--fail-on-warn` triggered) |
+| 1 | One or more expired annotations found (or `--fail-on-warn` triggered, or ratchet exceeded) |
 | 2 | Configuration or runtime error |
 
-`list` **always** exits 0 — it is purely informational. Only `check` uses exit code 1.
+`list` and `fix` **always** exit 0 — they are informational/interactive. Only `check` uses exit code 1.
+
+### `fix` command — two-pass interactive resolution
+
+`fix` collects all user decisions in a first pass (interactive prompts), then applies them in a second pass bottom-up by descending line number per file. This avoids line-shift bugs that would occur if edits were applied during the prompt loop. It reuses `snooze::snooze_line` for Extend and `remove::remove_line` for Delete.
+
+### `--changed` mode — diff-aware filtering
+
+`check --changed --base <ref>` runs the normal scan, then filters results to annotations whose file+line appear in the changed line ranges returned by `diff::git_changed_line_ranges`. The diff parser (`parse_unified_diff`) is a pure function that takes a `git diff --unified=0` string and returns `HashMap<PathBuf, Vec<RangeInclusive<usize>>>`. Both staged and unstaged diffs are merged.
+
+### Baseline ratchet
+
+`baseline save` writes `.timebomb-baseline.json` with the current expired and expiring-soon counts. `check` loads this file (if present) and calls `check_ratchet` — a pure function returning a `Vec<String>` of violation messages. Four independent checks: `max_expired` ceiling, `max_expiring_soon` ceiling, regression vs. baseline expired, regression vs. baseline expiring-soon. Any violation causes `check` to exit 1.
 
 ---
 
@@ -136,21 +165,22 @@ GitHub Actions format emits `::error` and `::warning` annotation lines. Terminal
 
 ---
 
-## Known performance considerations
+## Performance notes
 
-Two performance reviews were conducted by agent review. Key findings to be aware of:
+These were reviewed and addressed. Remaining known cost:
 
-1. **`is_binary` runs serially in Phase 1**, meaning every candidate file is opened twice (once for binary check, once in `scan_file`). This serialises what could be parallel I/O. A future improvement is to move binary detection into Phase 2 inside `scan_file` by reading raw bytes with `std::fs::read`, checking for null bytes, then decoding — eliminating the double open.
+- **`is_binary` runs serially in Phase 1** — every candidate file is opened once for binary detection, then again in Phase 2 via `fs::read`. The double-open is a known tradeoff; moving binary detection into Phase 2 would require reading the full file before knowing whether to skip it.
 
-2. **Missing line-level pre-filter in `scan_content`**: `regex.captures_iter()` is called on every line even when the line cannot possibly match (no `[` character). Adding `if !line.contains('[') { continue; }` before the regex call eliminates the regex engine overhead on the ~99.9% of lines that have no annotation.
-
-3. **Allocations before date validation**: In `scan_content`, `tag.to_uppercase()`, `message.to_string()`, and `owner.to_string()` are called before `NaiveDate::parse_from_str`. On invalid-date lines these allocations are immediately discarded. Moving date parsing above the string allocations makes the error path alloc-free.
-
-4. **`sort_by_key` vs `sort_unstable_by_key`**: The final sort in Phase 3 uses stable sort. Since there is no meaningful tiebreaker for equal dates, `sort_unstable_by_key` is a free speed improvement.
-
-5. **`BufReader` in `is_binary`**: Wraps a single 8 KB read — the `BufReader` adds overhead without benefit. A plain `File::read` into a stack buffer is sufficient.
-
-These are documented for awareness; they are not yet fixed. Address them in priority order (2 → 3 → 1 → 4 → 5) if performance becomes a bottleneck.
+The following were already fixed:
+- Line-level `[` pre-filter in `scan_content` before the regex is applied
+- Allocations deferred until after date validation in `scan_content`
+- `OnceLock` caches for regexes in `snooze.rs` and `diff.rs`
+- Single-pass fold for expired/warning/ok counts in `output.rs`
+- Single-buffer file reconstruction in `snooze.rs` and `fix.rs` (no per-line `String` allocs)
+- `sort_unstable_by_key` for the final Phase 3 sort
+- `HashSet<&str>` instead of `HashSet<String>` for membership lookups in `trend.rs`
+- Iterator `.next()` instead of `collect::<Vec<_>>()` for two-field destructure in `blame.rs`
+- Char-safe `char_indices().nth(N)` instead of byte-slice truncation in `stats.rs`
 
 ---
 
@@ -163,7 +193,7 @@ These are documented for awareness; they are not yet fixed. Address them in prio
 | `regex` | Compiled, reusable annotation pattern matching |
 | `chrono` | `NaiveDate` arithmetic for expiry calculation |
 | `toml` + `serde` | `.timebomb.toml` deserialization |
-| `serde_json` | JSON output format |
+| `serde_json` | JSON output format and baseline file I/O |
 | `globset` | Fast glob matching for exclude patterns |
 | `colored` | Terminal color; respects `NO_COLOR` automatically |
 | `rayon` | Data-parallel file scanning in Phase 2 |
@@ -178,8 +208,6 @@ Do not add new dependencies without a clear justification. Prefer extending exis
 - **Do not call `std::process::exit` outside `main.rs`**. Library code must return `Result`; exit codes are resolved only at the top level.
 - **Do not fetch the current date inside the scanner**. Always use the injected `today: NaiveDate`.
 - **Do not compile the regex inside `scan_file` or `scan_content`**. It must be compiled once in `scan()` and passed by reference.
-- **Do not make `list` exit non-zero**. It is informational only.
+- **Do not make `list` or `fix` exit non-zero**. They are informational/interactive only.
 - **Do not add language-specific parsers**. The scanner is intentionally language-agnostic — it matches tag patterns anywhere on a line regardless of comment syntax.
-```
-
-Ignoring the model's response since it was prompted directly.
+- **Do not apply edits top-down in `fix` or `snooze`**. Always apply bottom-up (descending line number) to avoid line-shift bugs when multiple annotations are in the same file.

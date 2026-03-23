@@ -1,5 +1,7 @@
 # timebomb 💣
 
+[![CI](https://github.com/pbsladek/timebomb/actions/workflows/ci.yml/badge.svg)](https://github.com/pbsladek/timebomb/actions/workflows/ci.yml)
+
 A CLI tool that scans source code for **expiring TODO/FIXME annotations** and fails with a non-zero exit code in CI when any annotation's deadline has passed.
 
 It enforces the social contract that temporary code actually gets removed.
@@ -108,6 +110,9 @@ timebomb check --warn-within 30d
 # Fail (exit 1) if any items are in the warning window too
 timebomb check --warn-within 30d --fail-on-warn
 
+# Only check annotations on lines changed since a given ref
+timebomb check --changed --base main
+
 # Machine-readable JSON output
 timebomb check --format json
 
@@ -141,6 +146,77 @@ timebomb list ./src
 
 # Enrich unowned annotations with the git blame author
 timebomb list --blame
+```
+
+### `fix` — Interactively resolve expired annotations
+
+```bash
+# Walk through each expired annotation and choose what to do
+timebomb fix
+
+# Fix annotations in a specific directory
+timebomb fix ./src
+```
+
+For each expired annotation `fix` prompts:
+
+```
+EXPIRED src/auth/login.rs:42  TODO[2025-01-15]: remove legacy oauth flow
+
+  [e] Extend to new date
+  [d] Delete line
+  [s] Skip
+
+Choice:
+```
+
+- **Extend** — prompts for a new date (must be strictly after today) and bumps the deadline in-place
+- **Delete** — removes the annotation line from the file entirely
+- **Skip** — leaves the annotation unchanged
+
+After all prompts, a summary is printed showing how many annotations were extended, deleted, or skipped. Files are updated in a single bottom-up pass per file to avoid line-shift bugs.
+
+### `baseline` — Ratchet enforcement
+
+```bash
+# Save the current expired/expiring-soon counts as a baseline
+timebomb baseline save
+
+# Save baseline for a specific path
+timebomb baseline save ./src
+
+# Show the current baseline and how the repo compares to it
+timebomb baseline show
+
+# Show baseline for a specific path
+timebomb baseline show ./src
+```
+
+`baseline save` writes a `.timebomb-baseline.json` file in the current directory:
+
+```json
+{
+  "generated_at": "2026-03-22T10:00:00Z",
+  "expired": 3,
+  "expiring_soon": 5
+}
+```
+
+`baseline show` scans and prints a comparison table:
+
+```
+Baseline comparison
+
+  Metric          Baseline   Now   Delta
+  expired                3     3      +0
+  expiring_soon          5     4      -1
+```
+
+**Ratchet enforcement in CI:** When `.timebomb-baseline.json` exists, `timebomb check` automatically loads it and fails (exit 1) if the current expired or expiring-soon count exceeds the baseline. You can also set hard ceilings in `.timebomb.toml`:
+
+```toml
+max_expired = 0
+max_expiring_soon = 5
 ```
 
 ### `hook` — Manage the git pre-commit hook
@@ -211,10 +287,10 @@ Trend: 2025-01-01T00:00:00Z → 2025-02-01T00:00:00Z
 | Code | Meaning |
 |------|---------|
 | `0` | No expired annotations found |
-| `1` | One or more expired annotations found (or expiring-soon if `--fail-on-warn`) |
+| `1` | One or more expired annotations found (or expiring-soon if `--fail-on-warn`, or ratchet exceeded) |
 | `2` | Configuration or runtime error |
 
-> **Note:** `timebomb list` always exits `0` regardless of expiry status — it is purely informational. Only `timebomb check` can produce a non-zero exit code.
+> **Note:** `timebomb list` and `timebomb fix` always exit `0` — they are informational/interactive. Only `timebomb check` can produce a non-zero exit code.
 
 ---
 
@@ -316,6 +392,11 @@ exclude = [
 
 # File extensions to scan (if empty, scans all text files)
 extensions = ["rs", "go", "ts", "js", "py", "rb", "java", "sql", "tf", "yaml", "yml"]
+
+# Ratchet ceilings: check fails if the live count exceeds these values.
+# Omit to disable. Use with `timebomb baseline save` for gradual tightening.
+max_expired = 0
+max_expiring_soon = 5
 ```
 
 **Merge order:** Config file values are loaded first, then CLI flags override them.
@@ -330,6 +411,8 @@ If no config file is found, built-in defaults are used silently.
 | `warn_within_days` | integer | `0` | Days before expiry to start warning |
 | `exclude` | `[string]` | `["vendor/**","node_modules/**","*.min.js",".git/**"]` | Glob patterns to exclude |
 | `extensions` | `[string]` | `["rs","go","ts","js","py","rb","java","sql","tf","yaml","yml"]` | File extensions to scan |
+| `max_expired` | integer | (none) | Hard ceiling on expired count; `check` exits 1 if exceeded |
+| `max_expiring_soon` | integer | (none) | Hard ceiling on expiring-soon count; `check` exits 1 if exceeded |
 
 ---
 
@@ -415,7 +498,7 @@ timebomb:
 - **Exclude globs:** Paths matching any pattern in `exclude` are skipped entirely.
 - **Extension filtering:** Only files with extensions in the `extensions` list are scanned. If the list is empty, all non-binary files are scanned.
 - **Binary file detection:** Files are checked for null bytes (`\x00`) in the first 8 KB. If found, the file is skipped silently.
-- **Line-by-line scanning:** Each file is scanned line by line using a single compiled regex.
+- **Line-by-line scanning:** Each file is scanned line by line using a single compiled regex shared across all rayon worker threads.
 - **Regex pattern:** `(?i)(TODO|FIXME|HACK|TEMP|REMOVEME)\[(\d{4}-\d{2}-\d{2})\](\[([^\]]+)\])?:\s*(.+)`
 - **Invalid dates:** An annotation like `TODO[2026-13-45]` (invalid month) emits a warning to stderr but does not crash.
 - **Consistent "today":** The current date is derived once at program start and passed through the entire scan, so long runs across midnight are consistent.
@@ -427,7 +510,7 @@ timebomb:
 
 ### Prerequisites
 
-- Rust 1.70 or later (`rustup install stable`)
+- Rust 1.80 or later (`rustup install stable`)
 
 ### Build
 
@@ -463,8 +546,17 @@ cargo run -- check ./src --warn-within 14d
 # List all annotations as JSON
 cargo run -- list --format json
 
+# Interactively fix all expired annotations
+cargo run -- fix ./src
+
+# Save a baseline snapshot
+cargo run -- baseline save
+
 # Check and fail on warns too
 cargo run -- check --warn-within 30d --fail-on-warn
+
+# Only check lines changed since main
+cargo run -- check --changed --base main
 ```
 
 ---
@@ -475,6 +567,7 @@ cargo run -- check --warn-within 30d --fail-on-warn
 timebomb/
 ├── Cargo.toml
 ├── .timebomb.toml          # Example configuration file
+├── .gitignore
 ├── src/
 │   ├── lib.rs              # Library root — exposes all modules
 │   ├── main.rs             # CLI entrypoint, clap setup, subcommand dispatch
@@ -492,10 +585,16 @@ timebomb/
 │   ├── init.rs             # timebomb init command
 │   ├── add.rs              # timebomb add command (insert annotations)
 │   ├── snooze.rs           # timebomb snooze command (bump deadlines)
+│   ├── fix.rs              # timebomb fix command (interactive resolution)
+│   ├── diff.rs             # Unified diff parsing for --changed mode
+│   ├── baseline.rs         # Baseline save/show/ratchet enforcement
 │   └── git.rs              # Git helpers (changed files, repo detection)
 ├── tests/
 │   ├── scanner_tests.rs    # Integration tests for the scanner
 │   ├── config_tests.rs     # Integration tests for config loading
+│   ├── fix_tests.rs        # Integration tests for the fix command
+│   ├── diff_tests.rs       # Integration tests for diff parsing
+│   ├── baseline_tests.rs   # Integration tests for baseline ratchet
 │   └── fixtures/           # Sample files with known annotations
 │       ├── sample.rs       # Rust fixture
 │       ├── sample.py       # Python fixture
@@ -513,11 +612,11 @@ No. Plain TODOs without a date bracket are intentionally ignored. Only annotatio
 
 **Q: What if I need more time to fix something?**
 
-Update the date in the annotation. This is intentional — it forces a conscious decision to extend the deadline rather than silently ignoring it.
+Update the date in the annotation, or run `timebomb fix` to do it interactively. This is intentional — it forces a conscious decision to extend the deadline rather than silently ignoring it.
 
 **Q: Can I use timebomb with pre-existing technical debt?**
 
-Yes. Start by running `timebomb list` to see everything, then use `timebomb check` in CI with a date in the near future. Gradually add timebomb annotations to new temporary code; you don't have to annotate everything at once.
+Yes. Start by running `timebomb list` to see everything. Run `timebomb baseline save` to snapshot the current debt, then add `timebomb check` to CI — it will only fail if debt grows beyond the baseline. Gradually tighten the baseline over time.
 
 **Q: What if a date is genuinely far in the future (e.g., after a contract period)?**
 
@@ -542,6 +641,14 @@ When `--blame` is passed, timebomb runs `git blame --porcelain` on each file tha
 **Q: Is `timebomb hook install` safe if I already have a pre-commit hook?**
 
 Yes. It appends the timebomb block to the existing file without touching any other content. The markers `# BEGIN timebomb` / `# END timebomb` make the block idempotent (installing twice only writes one block) and cleanly removable with `timebomb hook uninstall`.
+
+**Q: What does `--changed` do?**
+
+`timebomb check --changed --base main` only reports annotations on lines that were added or modified since the given base ref. It parses `git diff --unified=0` (both staged and unstaged) to determine which lines changed, then filters the scan results to that set. This is useful in pre-commit hooks or PR checks where you only want to enforce the rule on new code.
+
+**Q: How does `baseline` work with ratchet enforcement?**
+
+`timebomb baseline save` records the current expired and expiring-soon counts. Once a `.timebomb-baseline.json` exists, `timebomb check` automatically loads it and fails if either count exceeds the baseline — preventing annotation debt from growing while not requiring you to fix everything immediately. You can also set hard ceilings (`max_expired`, `max_expiring_soon`) in `.timebomb.toml` independently of the baseline file.
 
 **Q: How do I track annotation debt over time with `trend`?**
 

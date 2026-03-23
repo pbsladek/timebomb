@@ -2,13 +2,13 @@
 # Dates are chosen to be permanently in the past or far future so tests never
 # depend on the current wall-clock date.
 
+# FIXME[2019-03-15]: monkey-patch for upstream library bug, remove after upgrade
+import os
+
 # ── Expired annotations (date in the past) ────────────────────────────────
 
 # TODO[2020-01-01]: remove compatibility shim for Python 2
 legacy_compat = True
-
-# FIXME[2019-03-15]: monkey-patch for upstream library bug, remove after upgrade
-import os
 
 _env = os.environ.get("LEGACY", "")
 
