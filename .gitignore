@@ -1,0 +1,23 @@
+# Rust build artifacts
+/target/
+
+# Claude Code agent state
+/.claude/
+
+# cargo-dist release artifacts
+dist-manifest.json
+plan-dist-manifest.json
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Environment
+.env
+.env.local
+
+# Smoke test temp files (default location; override with SMOKE_DIR)
+/tmp/timebomb-smoke/
