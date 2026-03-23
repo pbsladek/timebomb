@@ -6,7 +6,9 @@ use timebomb::error::{parse_duration_days, Error};
 use timebomb::git::{git_changed_files, is_git_repo};
 use timebomb::hook;
 use timebomb::output::{print_list, print_scan_result, OutputFormat};
+use timebomb::remove::{run_remove, run_remove_all_expired};
 use timebomb::scanner::scan;
+use timebomb::snooze::run_snooze;
 use timebomb::stats::{compute_stats, print_stats};
 use timebomb::trend;
 
@@ -118,7 +120,33 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             args.yes,
             &args.message,
             today,
+            args.search.as_deref(),
         ),
+
+        Command::Snooze(args) => run_snooze(
+            &args.target,
+            args.date.as_deref(),
+            args.in_days,
+            args.reason.as_deref(),
+            args.yes,
+            today,
+            args.search.as_deref(),
+        ),
+
+        Command::Remove(args) => {
+            if args.all_expired {
+                let scan_path = canonicalize_path(Path::new(&args.path))?;
+                let overrides = CliOverrides::default();
+                let cfg = resolve_config(args.config.as_deref(), &scan_path, &overrides)?;
+                run_remove_all_expired(&scan_path, &cfg, today, args.yes)
+            } else if let Some(ref target) = args.target {
+                run_remove(target, args.search.as_deref(), args.yes)
+            } else {
+                Err(Error::InvalidArgument(
+                    "either a target FILE[:LINE] or --all-expired is required".to_string(),
+                ))
+            }
+        }
 
         Command::Stats(args) => {
             let scan_path = canonicalize_path(Path::new(&args.path))?;

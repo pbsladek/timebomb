@@ -48,6 +48,12 @@ impl ScanResult {
     }
 }
 
+/// Maximum file size that the scanner will read into memory (100 MiB).
+///
+/// Files larger than this are skipped with a warning. This prevents memory
+/// exhaustion from accidentally (or maliciously) large files in the scan tree.
+const MAX_FILE_BYTES: u64 = 100 * 1_024 * 1_024;
+
 /// Core scanner: walks `root`, respects config, and returns all found annotations.
 ///
 /// `today` is injected rather than derived internally so that tests can use a
@@ -72,6 +78,7 @@ pub fn scan(root: &Path, config: &Config, today: NaiveDate) -> Result<ScanResult
     let mut skipped_files: usize = 0;
 
     for entry in WalkDir::new(root)
+        // SECURITY: must remain false to prevent symlink traversal outside the scan root.
         .follow_links(false)
         .into_iter()
         .filter_map(|e| match e {
@@ -126,6 +133,18 @@ pub fn scan(root: &Path, config: &Config, today: NaiveDate) -> Result<ScanResult
     let results: Result<Vec<Vec<Annotation>>> = candidates
         .par_iter()
         .map(|c| {
+            // Reject oversized files before reading to prevent memory exhaustion.
+            let file_len = std::fs::metadata(&c.abs_path).map(|m| m.len()).unwrap_or(0);
+            if file_len > MAX_FILE_BYTES {
+                eprintln!(
+                    "warning: skipping '{}': file size ({} MiB) exceeds {} MiB limit",
+                    c.rel_path.display(),
+                    file_len / 1_024 / 1_024,
+                    MAX_FILE_BYTES / 1_024 / 1_024,
+                );
+                binary_count.fetch_add(1, Ordering::Relaxed);
+                return Ok(vec![]);
+            }
             let bytes = std::fs::read(&c.abs_path).map_err(|e| Error::Io {
                 source: e,
                 path: Some(c.abs_path.clone()),
@@ -177,6 +196,15 @@ pub fn scan_file(
     config: &Config,
     today: NaiveDate,
 ) -> Result<Vec<Annotation>> {
+    let file_len = std::fs::metadata(abs_path).map(|m| m.len()).unwrap_or(0);
+    if file_len > MAX_FILE_BYTES {
+        return Err(Error::InvalidArgument(format!(
+            "file '{}' ({} MiB) exceeds the {} MiB scan limit",
+            rel_path.display(),
+            file_len / 1_024 / 1_024,
+            MAX_FILE_BYTES / 1_024 / 1_024,
+        )));
+    }
     let bytes = std::fs::read(abs_path).map_err(|e| Error::Io {
         source: e,
         path: Some(abs_path.to_path_buf()),
@@ -255,11 +283,10 @@ pub fn build_regex(config: &Config) -> Result<Regex> {
 
 /// Detect binary files by looking for null bytes in the first 8 KB.
 ///
-/// Retained for unit testing. Not called in the scan pipeline — Phase 2 of
-/// `scan()` performs inline binary detection as part of the single `fs::read`
-/// call, avoiding a double file open.
-#[cfg(test)]
-pub(crate) fn is_binary(path: &Path) -> Result<bool> {
+/// Exposed for benchmarking and testing. Not called in the scan pipeline —
+/// Phase 2 of `scan()` performs inline binary detection as part of the single
+/// `fs::read` call, avoiding a double file open.
+pub fn is_binary(path: &Path) -> Result<bool> {
     use std::io::Read;
     let mut f = std::fs::File::open(path).map_err(|e| Error::Io {
         source: e,
@@ -275,9 +302,8 @@ pub(crate) fn is_binary(path: &Path) -> Result<bool> {
 }
 
 /// Convenience: scan a string with a freshly built regex.
-/// Useful for testing and one-off scanning without a filesystem walk.
-#[cfg(test)]
-pub(crate) fn scan_str(
+/// Useful for testing, benchmarking, and one-off scanning without a filesystem walk.
+pub fn scan_str(
     content: &str,
     rel_path: &Path,
     config: &Config,

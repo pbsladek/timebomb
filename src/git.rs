@@ -15,12 +15,42 @@ pub fn is_git_repo(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Validate that a git ref contains only safe characters.
+///
+/// Permits alphanumerics plus `.`, `/`, `-`, `_` — the characters needed for
+/// branch names, tags, and SHAs.  Rejects leading `--` (option injection) and
+/// any special git syntax characters (`@`, `^`, `~`, `:`).
+fn validate_git_ref(git_ref: &str) -> Result<()> {
+    if git_ref.is_empty() {
+        return Err(Error::InvalidArgument(
+            "git ref must not be empty".to_string(),
+        ));
+    }
+    if git_ref.starts_with("--") {
+        return Err(Error::InvalidArgument(format!(
+            "invalid git ref '{}': refs may not begin with '--'",
+            git_ref
+        )));
+    }
+    let valid = git_ref
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '/' | '-' | '_'));
+    if !valid {
+        return Err(Error::InvalidArgument(format!(
+            "invalid git ref '{}': only alphanumeric characters and '.', '/', '-', '_' are allowed",
+            git_ref
+        )));
+    }
+    Ok(())
+}
+
 /// Run `git diff --name-only <git_ref>` from `repo_root` and return the set
 /// of relative paths of changed files.
 ///
 /// Returns an error if git is not available, the repo_root is not a git repo,
 /// or the ref is invalid.
 pub fn git_changed_files(repo_root: &Path, git_ref: &str) -> Result<HashSet<PathBuf>> {
+    validate_git_ref(git_ref)?;
     let mut result = HashSet::new();
 
     // Run unstaged diff
@@ -136,6 +166,26 @@ mod tests {
             }
             && run(&["add", "."])
             && run(&["commit", "-m", "init"])
+    }
+
+    #[test]
+    fn test_validate_git_ref_valid() {
+        assert!(validate_git_ref("HEAD").is_ok());
+        assert!(validate_git_ref("main").is_ok());
+        assert!(validate_git_ref("origin/main").is_ok());
+        assert!(validate_git_ref("v1.2.3").is_ok());
+        assert!(validate_git_ref("abc1234").is_ok());
+        assert!(validate_git_ref("feat/my-feature").is_ok());
+    }
+
+    #[test]
+    fn test_validate_git_ref_invalid() {
+        assert!(validate_git_ref("").is_err());
+        assert!(validate_git_ref("--help").is_err());
+        assert!(validate_git_ref("HEAD^").is_err());
+        assert!(validate_git_ref("HEAD~1").is_err());
+        assert!(validate_git_ref("@{-1}").is_err());
+        assert!(validate_git_ref("refs:heads/main").is_err());
     }
 
     #[test]

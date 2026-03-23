@@ -1,0 +1,23 @@
+# cargo-release configuration
+# Docs: https://github.com/crate-ci/cargo-release/blob/master/docs/reference.md
+#
+# Usage:
+#   cargo release patch          # dry-run: show what would happen
+#   cargo release minor          # dry-run: show what would happen
+#   cargo release patch --execute   # bump, commit, tag, push
+#   cargo release minor --execute   # bump, commit, tag, push
+
+# Generate CHANGELOG.md from conventional commits before releasing
+pre-release-hook = ["git-cliff", "--tag", "{{version}}", "--output", "CHANGELOG.md"]
+
+# Commit message for the version bump
+pre-release-commit-message = "chore(release): bump version to {{version}}"
+
+# Annotated tag with message
+tag-message = "Release {{version}}"
+
+# Push both the commit and the tag in one step
+push = true
+
+# Do not publish to crates.io automatically (publish separately when ready)
+publish = false

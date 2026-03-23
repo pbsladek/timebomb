@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
@@ -99,11 +99,11 @@ fn bench_scan_content_no_annotations(c: &mut Criterion) {
     group.bench_function("no_bracket_10k_lines", |b| {
         b.iter(|| {
             scan_content(
-                black_box(&content_no_bracket),
-                black_box(path),
-                black_box(&regex),
-                black_box(&cfg),
-                black_box(today),
+                &content_no_bracket,
+                path,
+                &regex,
+                &cfg,
+                today,
             )
             .unwrap()
         })
@@ -112,11 +112,11 @@ fn bench_scan_content_no_annotations(c: &mut Criterion) {
     group.bench_function("bracket_no_annotation_10k_lines", |b| {
         b.iter(|| {
             scan_content(
-                black_box(&content_bracket),
-                black_box(path),
-                black_box(&regex),
-                black_box(&cfg),
-                black_box(today),
+                &content_bracket,
+                path,
+                &regex,
+                &cfg,
+                today,
             )
             .unwrap()
         })
@@ -140,11 +140,11 @@ fn bench_scan_content_sparse(c: &mut Criterion) {
     group.bench_function("5_annotations_10k_lines", |b| {
         b.iter(|| {
             scan_content(
-                black_box(&content),
-                black_box(path),
-                black_box(&regex),
-                black_box(&cfg),
-                black_box(today),
+                &content,
+                path,
+                &regex,
+                &cfg,
+                today,
             )
             .unwrap()
         })
@@ -179,11 +179,11 @@ fn bench_scan_content_density(c: &mut Criterion) {
             |b, content| {
                 b.iter(|| {
                     scan_content(
-                        black_box(content),
-                        black_box(path),
-                        black_box(&regex),
-                        black_box(&cfg),
-                        black_box(today),
+                        content,
+                        path,
+                        &regex,
+                        &cfg,
+                        today,
                     )
                     .unwrap()
                 })
@@ -210,11 +210,11 @@ fn bench_scan_content_dense(c: &mut Criterion) {
     group.bench_function("every_line_500_lines", |b| {
         b.iter(|| {
             scan_content(
-                black_box(&content_500),
-                black_box(path),
-                black_box(&regex),
-                black_box(&cfg),
-                black_box(today),
+                &content_500,
+                path,
+                &regex,
+                &cfg,
+                today,
             )
             .unwrap()
         })
@@ -224,11 +224,11 @@ fn bench_scan_content_dense(c: &mut Criterion) {
     group.bench_function("every_line_2k_lines", |b| {
         b.iter(|| {
             scan_content(
-                black_box(&content_2000),
-                black_box(path),
-                black_box(&regex),
-                black_box(&cfg),
-                black_box(today),
+                &content_2000,
+                path,
+                &regex,
+                &cfg,
+                today,
             )
             .unwrap()
         })
@@ -253,10 +253,10 @@ fn bench_scan_str_includes_regex_compile(c: &mut Criterion) {
     group.bench_function("1k_lines_5_annotations_with_regex_compile", |b| {
         b.iter(|| {
             scan_str(
-                black_box(&content),
-                black_box(path),
-                black_box(&cfg),
-                black_box(today),
+                &content,
+                path,
+                &cfg,
+                today,
             )
             .unwrap()
         })
@@ -267,11 +267,11 @@ fn bench_scan_str_includes_regex_compile(c: &mut Criterion) {
     group.bench_function("1k_lines_5_annotations_precompiled_regex", |b| {
         b.iter(|| {
             scan_content(
-                black_box(&content),
-                black_box(path),
-                black_box(&regex),
-                black_box(&cfg),
-                black_box(today),
+                &content,
+                path,
+                &regex,
+                &cfg,
+                today,
             )
             .unwrap()
         })
@@ -323,19 +323,19 @@ fn bench_build_regex(c: &mut Criterion) {
     let mut group = c.benchmark_group("build_regex");
 
     group.bench_function("default_5_tags", |b| {
-        b.iter(|| build_regex(black_box(&cfg_default)).unwrap())
+        b.iter(|| build_regex(&cfg_default).unwrap())
     });
 
     group.bench_function("1_tag", |b| {
-        b.iter(|| build_regex(black_box(&cfg_1_tag)).unwrap())
+        b.iter(|| build_regex(&cfg_1_tag).unwrap())
     });
 
     group.bench_function("5_tags", |b| {
-        b.iter(|| build_regex(black_box(&cfg_5_tags)).unwrap())
+        b.iter(|| build_regex(&cfg_5_tags).unwrap())
     });
 
     group.bench_function("10_tags", |b| {
-        b.iter(|| build_regex(black_box(&cfg_10_tags)).unwrap())
+        b.iter(|| build_regex(&cfg_10_tags).unwrap())
     });
 
     group.finish();
@@ -362,11 +362,11 @@ fn bench_is_binary(c: &mut Criterion) {
     let mut group = c.benchmark_group("is_binary");
 
     group.bench_function("text_file_8kb", |b| {
-        b.iter(|| is_binary(black_box(&text_path)).unwrap())
+        b.iter(|| is_binary(&text_path).unwrap())
     });
 
     group.bench_function("binary_file_8kb", |b| {
-        b.iter(|| is_binary(black_box(&binary_path)).unwrap())
+        b.iter(|| is_binary(&binary_path).unwrap())
     });
 
     group.finish();
@@ -393,11 +393,11 @@ fn bench_per_line_regex(c: &mut Criterion) {
     group.bench_function("annotation_line", |b| {
         b.iter(|| {
             scan_content(
-                black_box(annotation_line),
-                black_box(path),
-                black_box(&regex),
-                black_box(&cfg),
-                black_box(today),
+                annotation_line,
+                path,
+                &regex,
+                &cfg,
+                today,
             )
             .unwrap()
         })
@@ -406,11 +406,11 @@ fn bench_per_line_regex(c: &mut Criterion) {
     group.bench_function("plain_todo_no_date", |b| {
         b.iter(|| {
             scan_content(
-                black_box(plain_todo_line),
-                black_box(path),
-                black_box(&regex),
-                black_box(&cfg),
-                black_box(today),
+                plain_todo_line,
+                path,
+                &regex,
+                &cfg,
+                today,
             )
             .unwrap()
         })
@@ -419,11 +419,11 @@ fn bench_per_line_regex(c: &mut Criterion) {
     group.bench_function("code_line_no_bracket", |b| {
         b.iter(|| {
             scan_content(
-                black_box(code_line),
-                black_box(path),
-                black_box(&regex),
-                black_box(&cfg),
-                black_box(today),
+                code_line,
+                path,
+                &regex,
+                &cfg,
+                today,
             )
             .unwrap()
         })
@@ -432,11 +432,11 @@ fn bench_per_line_regex(c: &mut Criterion) {
     group.bench_function("bracket_line_no_annotation", |b| {
         b.iter(|| {
             scan_content(
-                black_box(bracket_line),
-                black_box(path),
-                black_box(&regex),
-                black_box(&cfg),
-                black_box(today),
+                bracket_line,
+                path,
+                &regex,
+                &cfg,
+                today,
             )
             .unwrap()
         })
@@ -451,7 +451,7 @@ fn bench_annotation_regex_pattern(c: &mut Criterion) {
     let cfg = default_config();
 
     c.bench_function("annotation_regex_pattern_build_string", |b| {
-        b.iter(|| black_box(cfg.annotation_regex_pattern()))
+        b.iter(|| cfg.annotation_regex_pattern())
     });
 }
 

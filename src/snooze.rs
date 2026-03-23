@@ -2,48 +2,8 @@
 //!
 //! This module implements the core logic for bumping the expiry date of an
 //! existing timebomb annotation in-place without manually editing the file.
-//!
-//! NOTE to cli agent: when wiring up `SnoozeArgs`, define it as:
-//!
-//! ```ignore
-//! /// Arguments for the `snooze` subcommand.
-//! #[derive(Debug, clap::Args)]
-//! pub struct SnoozeArgs {
-//!     /// Target file and line number in the form "path/to/file.rs:42"
-//!     #[arg(value_name = "FILE:LINE")]
-//!     pub target: String,
-//!
-//!     /// New expiry date as YYYY-MM-DD (mutually exclusive with --in-days)
-//!     #[arg(long, value_name = "DATE", conflicts_with = "in_days")]
-//!     pub date: Option<String>,
-//!
-//!     /// Number of days from today until new expiry (mutually exclusive with --date)
-//!     #[arg(long, value_name = "DAYS", conflicts_with = "date")]
-//!     pub in_days: Option<u32>,
-//!
-//!     /// Optional reason appended to the annotation message
-//!     #[arg(long, value_name = "TEXT")]
-//!     pub reason: Option<String>,
-//!
-//!     /// Skip the confirmation prompt and write immediately
-//!     #[arg(long, default_value_t = false)]
-//!     pub yes: bool,
-//! }
-//! ```
-//!
-//! Then add a thin wrapper in `cli.rs` / `main.rs` that calls:
-//!
-//! ```ignore
-//! timebomb::snooze::run_snooze(
-//!     &args.target,
-//!     args.date.as_deref(),
-//!     args.in_days,
-//!     args.reason.as_deref(),
-//!     args.yes,
-//!     today,
-//! )
-//! ```
 
+use crate::add::{find_matching_lines, parse_target};
 use crate::error::{Error, Result};
 use chrono::{Duration, NaiveDate};
 use regex::Regex;
@@ -60,12 +20,14 @@ use std::path::PathBuf;
 /// changes.
 ///
 /// # Parameters
-/// - `target`   — `"path/to/file.rs:42"` (file path + colon + 1-based line)
+/// - `target`   — `"path/to/file.rs:42"` when search is None; plain file path when search is Some
 /// - `date_str` — optional `"YYYY-MM-DD"` new expiry date
 /// - `in_days`  — optional number of days from `today` until new expiry
 /// - `reason`   — optional reason text appended to the annotation
 /// - `yes`      — skip confirmation prompt when `true`
 /// - `today`    — the current date (injected for testability)
+/// - `search`   — optional pattern; when Some, `target` is a plain file path
+#[allow(clippy::too_many_arguments)]
 pub fn run_snooze(
     target: &str,
     date_str: Option<&str>,
@@ -73,12 +35,39 @@ pub fn run_snooze(
     reason: Option<&str>,
     yes: bool,
     today: NaiveDate,
+    search: Option<&str>,
 ) -> Result<i32> {
-    // 1. Parse target --------------------------------------------------------
-    let (file_path, line_number) = parse_target(target)?;
+    // 1. Resolve file path and line number -----------------------------------
+    let (file_path, line_number) = if let Some(pattern) = search {
+        let path = PathBuf::from(target);
+        let matches = find_matching_lines(&path, pattern)?;
+        match matches.len() {
+            0 => {
+                return Err(Error::InvalidArgument(format!(
+                    "no lines matching '{}' found in {}",
+                    pattern, target
+                )));
+            }
+            1 => {
+                println!("matched line {}: {}", matches[0].0, matches[0].1.trim_end());
+                (path, matches[0].0)
+            }
+            n => {
+                let mut detail =
+                    format!("pattern '{}' matched {} lines in {}:", pattern, n, target);
+                for (ln, content) in &matches {
+                    detail.push_str(&format!("\n  line {}: {}", ln, content.trim_end()));
+                }
+                detail.push_str("\nuse FILE:LINE to be specific");
+                return Err(Error::InvalidArgument(detail));
+            }
+        }
+    } else {
+        parse_target(target)?
+    };
 
     // 2. Resolve the new expiry date ----------------------------------------
-    let new_date = resolve_new_date(date_str, in_days, today)?;
+    let new_date = resolve_new_date(date_str, in_days, today, yes)?;
 
     // 3. Read the file -------------------------------------------------------
     let content = std::fs::read_to_string(&file_path).map_err(|e| Error::Io {
@@ -176,59 +165,21 @@ pub fn run_snooze(
 }
 
 // ---------------------------------------------------------------------------
-// Helper: parse_target
-// ---------------------------------------------------------------------------
-
-/// Parse `"path/to/file.rs:42"` into `(PathBuf, usize)`.
-///
-/// Splits on the *last* `:` so that Windows absolute paths (`C:\foo\bar.rs:5`)
-/// are handled correctly as long as the user puts the colon-number at the end.
-pub fn parse_target(target: &str) -> Result<(PathBuf, usize)> {
-    let colon_pos = target.rfind(':').ok_or_else(|| {
-        Error::InvalidArgument(format!(
-            "target '{}' must be in the form 'file:LINE' (e.g. src/main.rs:42)",
-            target
-        ))
-    })?;
-
-    let file_part = &target[..colon_pos];
-    let line_part = &target[colon_pos + 1..];
-
-    if file_part.is_empty() {
-        return Err(Error::InvalidArgument(format!(
-            "target '{}': file path is empty",
-            target
-        )));
-    }
-
-    let line_number: usize = line_part.parse().map_err(|_| {
-        Error::InvalidArgument(format!(
-            "target '{}': '{}' is not a valid line number",
-            target, line_part
-        ))
-    })?;
-
-    if line_number == 0 {
-        return Err(Error::InvalidArgument(format!(
-            "target '{}': line number must be >= 1",
-            target
-        )));
-    }
-
-    Ok((PathBuf::from(file_part), line_number))
-}
-
-// ---------------------------------------------------------------------------
 // Helper: resolve_new_date
 // ---------------------------------------------------------------------------
 
 /// Resolve the new expiry `NaiveDate` from `--date` or `--in-days` arguments.
+///
+/// When both are None:
+/// - If `yes` is true: default to 90 days silently (prints a notice)
+/// - If `yes` is false: prompt the user for a number of days (default 90)
 ///
 /// `date_str` takes priority if both are somehow provided.
 pub fn resolve_new_date(
     date_str: Option<&str>,
     in_days: Option<u32>,
     today: NaiveDate,
+    yes: bool,
 ) -> Result<NaiveDate> {
     match (date_str, in_days) {
         (Some(s), _) => NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| {
@@ -238,9 +189,46 @@ pub fn resolve_new_date(
             let new_date = today + Duration::days(days as i64);
             Ok(new_date)
         }
-        (None, None) => Err(Error::InvalidArgument(
-            "either --date or --in-days is required".to_string(),
-        )),
+        (None, None) => {
+            let days: u32 = if yes {
+                let default_date =
+                    today
+                        .checked_add_signed(Duration::days(90))
+                        .ok_or_else(|| {
+                            Error::InvalidArgument(
+                                "90-day default overflows the calendar".to_string(),
+                            )
+                        })?;
+                println!(
+                    "No expiry specified; defaulting to 90 days from today ({})",
+                    default_date.format("%Y-%m-%d")
+                );
+                90
+            } else {
+                print!("Expire in how many days? [90]: ");
+                io::stdout().flush().map_err(|e| Error::Io {
+                    source: e,
+                    path: None,
+                })?;
+                let stdin = io::stdin();
+                let mut buf = String::new();
+                stdin.lock().read_line(&mut buf).map_err(|e| Error::Io {
+                    source: e,
+                    path: None,
+                })?;
+                let trimmed = buf.trim();
+                if trimmed.is_empty() {
+                    90
+                } else {
+                    trimmed.parse::<u32>().unwrap_or(90)
+                }
+            };
+            today
+                .checked_add_signed(Duration::days(days as i64))
+                .ok_or_else(|| {
+                    Error::InvalidArgument(format!("--in-days {} overflows the calendar", days))
+                })
+        }
     }
 }
 
@@ -307,79 +295,40 @@ mod tests {
         NaiveDate::from_ymd_opt(2025, 6, 1).unwrap()
     }
 
-    // -- parse_target --------------------------------------------------------
-
-    #[test]
-    fn test_parse_target_valid() {
-        let (path, line) = parse_target("src/foo.rs:10").unwrap();
-        assert_eq!(path, PathBuf::from("src/foo.rs"));
-        assert_eq!(line, 10);
-    }
-
-    #[test]
-    fn test_parse_target_nested_path() {
-        let (path, line) = parse_target("a/b/c.rs:1").unwrap();
-        assert_eq!(path, PathBuf::from("a/b/c.rs"));
-        assert_eq!(line, 1);
-    }
-
-    #[test]
-    fn test_parse_target_no_colon() {
-        let result = parse_target("src/foo.rs");
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("file:LINE") || msg.contains("form"));
-    }
-
-    #[test]
-    fn test_parse_target_line_zero() {
-        let result = parse_target("src/foo.rs:0");
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains(">= 1") || msg.contains("must be"));
-    }
-
-    #[test]
-    fn test_parse_target_non_numeric() {
-        let result = parse_target("src/foo.rs:abc");
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("valid line number") || msg.contains("abc"));
-    }
-
     // -- resolve_new_date ----------------------------------------------------
 
     #[test]
     fn test_resolve_new_date_from_str() {
-        let result = resolve_new_date(Some("2026-06-01"), None, today()).unwrap();
+        let result = resolve_new_date(Some("2026-06-01"), None, today(), true).unwrap();
         assert_eq!(result, date("2026-06-01"));
     }
 
     #[test]
     fn test_resolve_new_date_from_in_days() {
         // today = 2025-06-01, +30 days = 2025-07-01
-        let result = resolve_new_date(None, Some(30), today()).unwrap();
+        let result = resolve_new_date(None, Some(30), today(), true).unwrap();
         assert_eq!(result, date("2025-07-01"));
     }
 
     #[test]
-    fn test_resolve_new_date_neither() {
-        let result = resolve_new_date(None, None, today());
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("--date") || msg.contains("--in-days") || msg.contains("required"));
+    fn test_resolve_new_date_neither_yes_defaults_90() {
+        // When yes=true and no date/in_days, should default to 90 days
+        let t = today();
+        let result = resolve_new_date(None, None, t, true).unwrap();
+        let expected = t + Duration::days(90);
+        assert_eq!(result, expected);
     }
 
     #[test]
     fn test_resolve_new_date_prefers_date_str() {
         // When both are provided, date_str wins
-        let result = resolve_new_date(Some("2026-06-01"), Some(30), today()).unwrap();
+        let result = resolve_new_date(Some("2026-06-01"), Some(30), today(), true).unwrap();
         assert_eq!(result, date("2026-06-01"));
     }
 
     #[test]
     fn test_resolve_new_date_invalid_date_str() {
-        let result = resolve_new_date(Some("not-a-date"), None, today());
+        let result = resolve_new_date(Some("not-a-date"), None, today(), true);
         assert!(result.is_err());
     }
 
@@ -461,7 +410,7 @@ mod tests {
         fs::write(&file_path, content).unwrap();
 
         let target = format!("{}:2", file_path.display());
-        let result = run_snooze(&target, Some("2026-06-01"), None, None, true, today());
+        let result = run_snooze(&target, Some("2026-06-01"), None, None, true, today(), None);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
 
@@ -482,7 +431,7 @@ mod tests {
         fs::write(&file_path, content).unwrap();
 
         let target = format!("{}:1", file_path.display());
-        let result = run_snooze(&target, Some("2026-06-01"), None, None, true, today());
+        let result = run_snooze(&target, Some("2026-06-01"), None, None, true, today(), None);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("no timebomb date bracket found") || msg.contains("date bracket"));
@@ -497,7 +446,7 @@ mod tests {
         fs::write(&file_path, content).unwrap();
 
         let target = format!("{}:99", file_path.display());
-        let result = run_snooze(&target, Some("2026-06-01"), None, None, true, today());
+        let result = run_snooze(&target, Some("2026-06-01"), None, None, true, today(), None);
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -522,6 +471,7 @@ mod tests {
             Some("blocked on upstream release"),
             true,
             today(),
+            None,
         );
         assert!(result.is_ok());
 
@@ -541,7 +491,7 @@ mod tests {
 
         let target = format!("{}:1", file_path.display());
         // today = 2025-06-01, +30 days = 2025-07-01
-        let result = run_snooze(&target, None, Some(30), None, true, today());
+        let result = run_snooze(&target, None, Some(30), None, true, today(), None);
         assert!(result.is_ok());
 
         let updated = fs::read_to_string(&file_path).unwrap();
@@ -557,6 +507,7 @@ mod tests {
             None,
             true,
             today(),
+            None,
         );
         assert!(result.is_err());
         // Should be an Io error
@@ -574,11 +525,81 @@ mod tests {
         fs::write(&file_path, content).unwrap();
 
         let target = format!("{}:1", file_path.display());
-        let result = run_snooze(&target, Some("2026-01-01"), None, None, true, today());
+        let result = run_snooze(&target, Some("2026-01-01"), None, None, true, today(), None);
         assert!(result.is_ok());
 
         let updated = fs::read_to_string(&file_path).unwrap();
         assert!(updated.contains("2026-01-01"));
         assert!(!updated.contains("2024-12-31"));
+    }
+
+    // -- search-based run_snooze tests ---------------------------------------
+
+    #[test]
+    fn test_run_snooze_with_search_single_match() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.rs");
+
+        let content = "fn alpha() {}\n// TODO[2025-01-15]: legacy_auth remove\nfn beta() {}\n";
+        fs::write(&file_path, content).unwrap();
+
+        let result = run_snooze(
+            file_path.to_str().unwrap(),
+            Some("2027-01-01"),
+            None,
+            None,
+            true,
+            today(),
+            Some("legacy_auth"),
+        );
+        assert!(result.is_ok());
+
+        let updated = fs::read_to_string(&file_path).unwrap();
+        assert!(updated.contains("2027-01-01"));
+        assert!(!updated.contains("2025-01-15"));
+    }
+
+    #[test]
+    fn test_run_snooze_with_search_no_match() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.rs");
+
+        let content = "fn alpha() {}\nfn beta() {}\n";
+        fs::write(&file_path, content).unwrap();
+
+        let result = run_snooze(
+            file_path.to_str().unwrap(),
+            Some("2027-01-01"),
+            None,
+            None,
+            true,
+            today(),
+            Some("zzz_no_match"),
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("no lines matching"));
+    }
+
+    #[test]
+    fn test_run_snooze_with_search_multiple_matches() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.rs");
+
+        let content = "fn foo_a() {}\n// TODO[2025-01-15]: foo remove\nfn foo_b() {}\n";
+        fs::write(&file_path, content).unwrap();
+
+        let result = run_snooze(
+            file_path.to_str().unwrap(),
+            Some("2027-01-01"),
+            None,
+            None,
+            true,
+            today(),
+            Some("foo"),
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("matched") || msg.contains("lines"));
     }
 }

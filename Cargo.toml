@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "A CLI tool that scans source code for expiring TODO/FIXME annotations"
 license = "MIT"
+repository = "https://github.com/pbsladek/timebomb"
 
 [lib]
 name = "timebomb"
@@ -32,3 +33,8 @@ criterion = { version = "0.8", features = ["html_reports"] }
 [[bench]]
 name = "scanner_bench"
 harness = false
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

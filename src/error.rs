@@ -106,17 +106,30 @@ impl From<regex::Error> for Error {
 /// Convenience result alias
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Maximum allowed value for `--warn-within` (10 years).
+///
+/// Values beyond this are almost certainly mistakes (e.g. off-by-one on unit
+/// conversion) and would suppress all warnings across any realistic codebase.
+const MAX_WARN_WITHIN_DAYS: u32 = 3_650;
+
 /// Parse a duration string like "30d", "14d", "7d" into a number of days.
 /// Only day-based durations are supported.
 pub fn parse_duration_days(s: &str) -> Result<u32> {
     let s = s.trim();
     if let Some(num_str) = s.strip_suffix('d') {
-        num_str.parse::<u32>().map_err(|_| {
+        let days = num_str.parse::<u32>().map_err(|_| {
             Error::InvalidArgument(format!(
                 "'{}' is not a valid duration — expected a format like '30d'",
                 s
             ))
-        })
+        })?;
+        if days > MAX_WARN_WITHIN_DAYS {
+            return Err(Error::InvalidArgument(format!(
+                "'{}' exceeds the maximum allowed warn window of {}d (10 years)",
+                s, MAX_WARN_WITHIN_DAYS
+            )));
+        }
+        Ok(days)
     } else {
         Err(Error::InvalidArgument(format!(
             "'{}' is not a valid duration — expected a format like '30d'",
@@ -135,6 +148,13 @@ mod tests {
         assert_eq!(parse_duration_days("0d").unwrap(), 0);
         assert_eq!(parse_duration_days("365d").unwrap(), 365);
         assert_eq!(parse_duration_days("  14d  ").unwrap(), 14);
+    }
+
+    #[test]
+    fn test_parse_duration_days_cap() {
+        assert!(parse_duration_days("3650d").is_ok());
+        assert!(parse_duration_days("3651d").is_err());
+        assert!(parse_duration_days("9999999d").is_err());
     }
 
     #[test]

@@ -28,6 +28,39 @@ pub fn blame_file(repo_root: &Path, file: &Path) -> Option<HashMap<usize, BlameI
     Some(parse_blame_porcelain(&text))
 }
 
+/// Strip ANSI escape sequences and other control characters from a git blame author name.
+///
+/// A git committer can set any author name, including strings containing ANSI
+/// CSI escape sequences (e.g. `\x1b[31m`) or raw control codes.  These must
+/// be removed before the name is embedded in terminal or JSON output to prevent
+/// display corruption or terminal injection.
+///
+/// This function handles the most common case: CSI sequences of the form
+/// `ESC [ <params> <final-byte>` (final byte in 0x40–0x7E).  Other ESC
+/// sequences and bare control characters are dropped as well.
+fn sanitize_author(name: &str) -> String {
+    let mut result = String::with_capacity(name.len());
+    let mut chars = name.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // CSI sequence: ESC '[' <params…> <final 0x40–0x7E>
+            if chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+                for inner in chars.by_ref() {
+                    if ('\x40'..='\x7e').contains(&inner) {
+                        break; // final byte consumed; sequence done
+                    }
+                }
+            }
+            // Other ESC sequences: just drop the ESC and let the loop continue
+        } else if !c.is_control() {
+            result.push(c);
+        }
+        // Bare control characters (other than ESC) are silently dropped
+    }
+    result.trim().to_string()
+}
+
 /// Parse `git blame --porcelain` output into a map of final-line-number → BlameInfo.
 ///
 /// Porcelain format: each "hunk" begins with a header line:
@@ -65,7 +98,7 @@ fn parse_blame_porcelain(output: &str) -> HashMap<usize, BlameInfo> {
                 break;
             }
             if let Some(name) = meta.strip_prefix("author ") {
-                author = name.to_string();
+                author = sanitize_author(name);
             }
         }
 
@@ -132,6 +165,18 @@ mod tests {
             status: Status::Expired,
             blamed_owner: None,
         }
+    }
+
+    #[test]
+    fn test_sanitize_author_strips_control_chars() {
+        // ANSI escape sequences (e.g. \x1b[31m) must be stripped.
+        assert_eq!(sanitize_author("\x1b[31mred name\x1b[0m"), "red name");
+        // Null bytes and other control characters must be stripped.
+        assert_eq!(sanitize_author("alice\x00bob"), "alicebob");
+        // Normal names pass through unchanged.
+        assert_eq!(sanitize_author("Alice Smith"), "Alice Smith");
+        // Leading/trailing whitespace is trimmed.
+        assert_eq!(sanitize_author("  Alice  "), "Alice");
     }
 
     #[test]

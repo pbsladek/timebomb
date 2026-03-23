@@ -27,6 +27,12 @@ pub enum Command {
     /// Insert a timebomb annotation into a source file
     Add(AddArgs),
 
+    /// Bump the expiry date on an existing annotation without editing the file
+    Snooze(SnoozeArgs),
+
+    /// Remove an annotation from a source file
+    Remove(RemoveArgs),
+
     /// Show annotation counts broken down by owner and tag
     Stats(StatsArgs),
 
@@ -105,12 +111,16 @@ pub struct ListArgs {
 #[derive(Debug, clap::Args)]
 pub struct AddArgs {
     /// File and line to annotate, e.g. "src/main.rs:42"
-    #[arg(value_name = "FILE:LINE")]
+    #[arg(value_name = "FILE[:LINE]")]
     pub target: String,
 
-    /// Annotation message
-    #[arg(long, value_name = "TEXT")]
+    /// Annotation message (what needs to be done / why)
+    #[arg(value_name = "MESSAGE")]
     pub message: String,
+
+    /// Search for a pattern instead of specifying :LINE
+    #[arg(long, value_name = "PATTERN")]
+    pub search: Option<String>,
 
     /// Tag to use (default: TODO)
     #[arg(long, default_value = "TODO", value_name = "TAG")]
@@ -130,6 +140,63 @@ pub struct AddArgs {
 
     /// Skip the confirmation prompt and write immediately
     #[arg(long, default_value_t = false)]
+    pub yes: bool,
+}
+
+/// Arguments for the `snooze` subcommand.
+#[derive(Debug, clap::Args)]
+pub struct SnoozeArgs {
+    /// Target file and line, e.g. "src/main.rs:42"
+    #[arg(value_name = "FILE[:LINE]")]
+    pub target: String,
+
+    /// New expiry date as YYYY-MM-DD
+    #[arg(long, value_name = "DATE", conflicts_with = "in_days")]
+    pub date: Option<String>,
+
+    /// New expiry as number of days from today
+    #[arg(long, value_name = "DAYS", conflicts_with = "date")]
+    pub in_days: Option<u32>,
+
+    /// Reason for snoozing (appended to the annotation message)
+    #[arg(long, value_name = "TEXT")]
+    pub reason: Option<String>,
+
+    /// Search for a pattern instead of specifying :LINE
+    #[arg(long, value_name = "PATTERN")]
+    pub search: Option<String>,
+
+    /// Skip confirmation prompt
+    #[arg(long, default_value_t = false)]
+    pub yes: bool,
+}
+
+/// Arguments for the `remove` subcommand.
+#[derive(Debug, clap::Args)]
+pub struct RemoveArgs {
+    /// File and line to remove, e.g. "src/main.rs:42"
+    /// Omit when using --all-expired
+    #[arg(value_name = "FILE[:LINE]")]
+    pub target: Option<String>,
+
+    /// Search for a pattern to find the annotation to remove
+    #[arg(long, value_name = "PATTERN", conflicts_with = "all_expired")]
+    pub search: Option<String>,
+
+    /// Remove all expired annotations across the scan path
+    #[arg(long, conflicts_with = "target")]
+    pub all_expired: bool,
+
+    /// Path to scan (used with --all-expired, default: current directory)
+    #[arg(long, default_value = ".", value_name = "PATH")]
+    pub path: String,
+
+    /// Path to config file (used with --all-expired)
+    #[arg(long, value_name = "FILE")]
+    pub config: Option<String>,
+
+    /// Skip confirmation prompt
+    #[arg(long, short, default_value_t = false)]
     pub yes: bool,
 }
 
@@ -371,14 +438,52 @@ mod tests {
     // ── add subcommand ────────────────────────────────────────────────────────
 
     #[test]
-    fn test_add_defaults() {
+    fn test_add_message_positional() {
+        // Message is now positional
         let cli = parse(&[
             "timebomb",
             "add",
             "src/main.rs:42",
-            "--message",
-            "remove this",
+            "--in-days",
+            "90",
+            "the message",
         ]);
+        match cli.command {
+            Command::Add(args) => {
+                assert_eq!(args.target, "src/main.rs:42");
+                assert_eq!(args.message, "the message");
+                assert_eq!(args.in_days, Some(90));
+            }
+            _ => panic!("expected Add"),
+        }
+    }
+
+    #[test]
+    fn test_add_with_search() {
+        let cli = parse(&[
+            "timebomb",
+            "add",
+            "src/foo.rs",
+            "--search",
+            "legacy_auth",
+            "--in-days",
+            "30",
+            "msg",
+        ]);
+        match cli.command {
+            Command::Add(args) => {
+                assert_eq!(args.target, "src/foo.rs");
+                assert_eq!(args.search, Some("legacy_auth".to_string()));
+                assert_eq!(args.in_days, Some(30));
+                assert_eq!(args.message, "msg");
+            }
+            _ => panic!("expected Add"),
+        }
+    }
+
+    #[test]
+    fn test_add_defaults() {
+        let cli = parse(&["timebomb", "add", "src/main.rs:42", "remove this"]);
         match cli.command {
             Command::Add(args) => {
                 assert_eq!(args.target, "src/main.rs:42");
@@ -388,6 +493,7 @@ mod tests {
                 assert!(args.date.is_none());
                 assert!(args.in_days.is_none());
                 assert!(!args.yes);
+                assert!(args.search.is_none());
             }
             _ => panic!("expected Add"),
         }
@@ -399,7 +505,6 @@ mod tests {
             "timebomb",
             "add",
             "src/auth.rs:10",
-            "--message",
             "remove oauth flow",
             "--tag",
             "FIXME",
@@ -412,6 +517,7 @@ mod tests {
         match cli.command {
             Command::Add(args) => {
                 assert_eq!(args.target, "src/auth.rs:10");
+                assert_eq!(args.message, "remove oauth flow");
                 assert_eq!(args.tag, "FIXME");
                 assert_eq!(args.owner, Some("alice".to_string()));
                 assert_eq!(args.date, Some("2026-09-01".to_string()));
@@ -427,7 +533,6 @@ mod tests {
             "timebomb",
             "add",
             "src/lib.rs:1",
-            "--message",
             "cleanup",
             "--in-days",
             "90",
@@ -444,7 +549,6 @@ mod tests {
             "timebomb",
             "add",
             "src/lib.rs:1",
-            "--message",
             "cleanup",
             "--date",
             "2026-01-01",
@@ -452,6 +556,143 @@ mod tests {
             "30",
         ]);
         assert!(result.is_err(), "--date and --in-days should conflict");
+    }
+
+    // ── snooze subcommand ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_snooze_defaults() {
+        let cli = parse(&["timebomb", "snooze", "src/main.rs:42", "--in-days", "30"]);
+        match cli.command {
+            Command::Snooze(args) => {
+                assert_eq!(args.target, "src/main.rs:42");
+                assert_eq!(args.in_days, Some(30));
+                assert!(args.date.is_none());
+                assert!(args.reason.is_none());
+                assert!(args.search.is_none());
+                assert!(!args.yes);
+            }
+            _ => panic!("expected Snooze"),
+        }
+    }
+
+    #[test]
+    fn test_snooze_with_search() {
+        let cli = parse(&[
+            "timebomb",
+            "snooze",
+            "src/main.rs",
+            "--search",
+            "pattern",
+            "--in-days",
+            "30",
+        ]);
+        match cli.command {
+            Command::Snooze(args) => {
+                assert_eq!(args.target, "src/main.rs");
+                assert_eq!(args.search, Some("pattern".to_string()));
+                assert_eq!(args.in_days, Some(30));
+            }
+            _ => panic!("expected Snooze"),
+        }
+    }
+
+    #[test]
+    fn test_snooze_with_date() {
+        let cli = parse(&[
+            "timebomb",
+            "snooze",
+            "src/main.rs:42",
+            "--date",
+            "2027-01-01",
+        ]);
+        match cli.command {
+            Command::Snooze(args) => {
+                assert_eq!(args.date, Some("2027-01-01".to_string()));
+                assert!(args.in_days.is_none());
+            }
+            _ => panic!("expected Snooze"),
+        }
+    }
+
+    #[test]
+    fn test_snooze_with_reason() {
+        let cli = parse(&[
+            "timebomb",
+            "snooze",
+            "src/main.rs:42",
+            "--in-days",
+            "30",
+            "--reason",
+            "blocked upstream",
+        ]);
+        match cli.command {
+            Command::Snooze(args) => {
+                assert_eq!(args.reason, Some("blocked upstream".to_string()));
+            }
+            _ => panic!("expected Snooze"),
+        }
+    }
+
+    // ── remove subcommand ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_remove_by_target() {
+        let cli = parse(&["timebomb", "remove", "src/main.rs:42"]);
+        match cli.command {
+            Command::Remove(args) => {
+                assert_eq!(args.target, Some("src/main.rs:42".to_string()));
+                assert!(args.search.is_none());
+                assert!(!args.all_expired);
+            }
+            _ => panic!("expected Remove"),
+        }
+    }
+
+    #[test]
+    fn test_remove_with_search() {
+        let cli = parse(&["timebomb", "remove", "src/main.rs", "--search", "pattern"]);
+        match cli.command {
+            Command::Remove(args) => {
+                assert_eq!(args.target, Some("src/main.rs".to_string()));
+                assert_eq!(args.search, Some("pattern".to_string()));
+            }
+            _ => panic!("expected Remove"),
+        }
+    }
+
+    #[test]
+    fn test_remove_all_expired() {
+        let cli = parse(&["timebomb", "remove", "--all-expired", "--path", "./src"]);
+        match cli.command {
+            Command::Remove(args) => {
+                assert!(args.all_expired);
+                assert_eq!(args.path, "./src");
+                assert!(args.target.is_none());
+            }
+            _ => panic!("expected Remove"),
+        }
+    }
+
+    #[test]
+    fn test_remove_all_expired_default_path() {
+        let cli = parse(&["timebomb", "remove", "--all-expired"]);
+        match cli.command {
+            Command::Remove(args) => {
+                assert!(args.all_expired);
+                assert_eq!(args.path, ".");
+            }
+            _ => panic!("expected Remove"),
+        }
+    }
+
+    #[test]
+    fn test_remove_yes_flag() {
+        let cli = parse(&["timebomb", "remove", "src/main.rs:42", "--yes"]);
+        match cli.command {
+            Command::Remove(args) => assert!(args.yes),
+            _ => panic!("expected Remove"),
+        }
     }
 
     // ── stats subcommand ──────────────────────────────────────────────────────

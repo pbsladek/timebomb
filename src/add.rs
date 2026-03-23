@@ -4,62 +4,11 @@
 //! into a source file at a specific line. It is intentionally defined with
 //! primitive parameters so that it compiles independently of any `AddArgs`
 //! struct changes in `cli.rs`.
-//!
-//! NOTE to cli agent: when wiring up `AddArgs`, define it as:
-//!
-//! ```ignore
-//! /// Arguments for the `add` subcommand.
-//! #[derive(Debug, clap::Args)]
-//! pub struct AddArgs {
-//!     /// Target file and line number in the form "path/to/file.rs:42"
-//!     #[arg(value_name = "FILE:LINE")]
-//!     pub target: String,
-//!
-//!     /// The tag keyword to use (e.g. TODO, FIXME)
-//!     #[arg(long, default_value = "TODO", value_name = "TAG")]
-//!     pub tag: String,
-//!
-//!     /// Optional owner name
-//!     #[arg(long, value_name = "OWNER")]
-//!     pub owner: Option<String>,
-//!
-//!     /// Expiry date as YYYY-MM-DD (mutually exclusive with --in-days)
-//!     #[arg(long, value_name = "DATE", conflicts_with = "in_days")]
-//!     pub date: Option<String>,
-//!
-//!     /// Number of days from today until expiry (mutually exclusive with --date)
-//!     #[arg(long, value_name = "DAYS", conflicts_with = "date")]
-//!     pub in_days: Option<u32>,
-//!
-//!     /// Skip the confirmation prompt and write immediately
-//!     #[arg(long, default_value_t = false)]
-//!     pub yes: bool,
-//!
-//!     /// The annotation message text
-//!     #[arg(long, value_name = "TEXT")]
-//!     pub message: String,
-//! }
-//! ```
-//!
-//! Then add a thin wrapper in `cli.rs` / `main.rs` that calls:
-//!
-//! ```ignore
-//! timebomb::add::run_add(
-//!     &args.target,
-//!     &args.tag,
-//!     args.owner.as_deref(),
-//!     args.date.as_deref(),
-//!     args.in_days,
-//!     args.yes,
-//!     &args.message,
-//!     today,
-//! )
-//! ```
 
 use crate::error::{Error, Result};
 use chrono::NaiveDate;
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -68,11 +17,10 @@ use std::path::PathBuf;
 /// Core logic for `timebomb add`.
 ///
 /// All parameters are primitives so this compiles independently of `cli.rs`
-/// changes. The cli wiring agent should add a thin `AddArgs` wrapper that
-/// delegates to this function.
+/// changes.
 ///
 /// # Parameters
-/// - `target`   — `"path/to/file.rs:42"` (file path + colon + 1-based line)
+/// - `target`   — `"path/to/file.rs:42"` when search is None; plain file path when search is Some
 /// - `tag`      — tag keyword, e.g. `"TODO"`
 /// - `owner`    — optional owner name
 /// - `date_str` — optional `"YYYY-MM-DD"` expiry date
@@ -80,6 +28,7 @@ use std::path::PathBuf;
 /// - `yes`      — skip confirmation prompt when `true`
 /// - `message`  — annotation message text
 /// - `today`    — the current date (injected for testability)
+/// - `search`   — optional pattern; when Some, `target` is a plain file path
 #[allow(clippy::too_many_arguments)]
 pub fn run_add(
     target: &str,
@@ -90,12 +39,39 @@ pub fn run_add(
     yes: bool,
     message: &str,
     today: NaiveDate,
+    search: Option<&str>,
 ) -> Result<i32> {
-    // 1. Parse target --------------------------------------------------------
-    let (file_path, line_number) = parse_target(target)?;
+    // 1. Resolve file path and line number -----------------------------------
+    let (file_path, line_number) = if let Some(pattern) = search {
+        let path = PathBuf::from(target);
+        let matches = find_matching_lines(&path, pattern)?;
+        match matches.len() {
+            0 => {
+                return Err(Error::InvalidArgument(format!(
+                    "no lines matching '{}' found in {}",
+                    pattern, target
+                )));
+            }
+            1 => {
+                println!("matched line {}: {}", matches[0].0, matches[0].1.trim_end());
+                (path, matches[0].0)
+            }
+            n => {
+                let mut detail =
+                    format!("pattern '{}' matched {} lines in {}:", pattern, n, target);
+                for (ln, content) in &matches {
+                    detail.push_str(&format!("\n  line {}: {}", ln, content.trim_end()));
+                }
+                detail.push_str("\nuse FILE:LINE to be specific");
+                return Err(Error::InvalidArgument(detail));
+            }
+        }
+    } else {
+        parse_target(target)?
+    };
 
     // 2. Resolve the expiry date ---------------------------------------------
-    let expiry = resolve_date(date_str, in_days, today)?;
+    let expiry = resolve_date(date_str, in_days, today, yes)?;
 
     // 3. Detect comment style ------------------------------------------------
     let prefix = detect_comment_style(&file_path);
@@ -176,18 +152,122 @@ pub fn run_add(
 
 /// Parse `"path/to/file.rs:42"` into `(PathBuf, usize)`.
 ///
+/// Accepts optional column and trailing editor context after the line number:
+/// - `src/foo.rs:42`
+/// - `src/foo.rs:42:7`
+/// - `src/foo.rs:42:7: some editor context`
+///
 /// Splits on the *last* `:` so that Windows absolute paths (`C:\foo\bar.rs:5`)
 /// are handled correctly as long as the user puts the colon-number at the end.
 pub fn parse_target(target: &str) -> Result<(PathBuf, usize)> {
-    let colon_pos = target.rfind(':').ok_or_else(|| {
+    // Find the last colon
+    let last_colon = target.rfind(':').ok_or_else(|| {
         Error::InvalidArgument(format!(
             "target '{}' must be in the form 'file:LINE' (e.g. src/main.rs:42)",
             target
         ))
     })?;
 
-    let file_part = &target[..colon_pos];
-    let line_part = &target[colon_pos + 1..];
+    let last_segment = &target[last_colon + 1..];
+
+    // Check if the last segment is purely digits (possibly with trailing spaces)
+    // If it is, it might be a column number — look back further.
+    if last_segment.trim().chars().all(|c| c.is_ascii_digit()) && !last_segment.trim().is_empty() {
+        // Could be file:line or file:line:col
+        // Check if there is another colon before this position
+        let before_last = &target[..last_colon];
+        if let Some(prev_colon) = before_last.rfind(':') {
+            let prev_segment = &before_last[prev_colon + 1..];
+            // If prev_segment is also purely digits, treat it as the line number
+            // and last_segment as the column
+            if prev_segment.trim().chars().all(|c| c.is_ascii_digit())
+                && !prev_segment.trim().is_empty()
+            {
+                let file_part = &before_last[..prev_colon];
+                let line_part = prev_segment.trim();
+
+                if file_part.is_empty() {
+                    return Err(Error::InvalidArgument(format!(
+                        "target '{}': file path is empty",
+                        target
+                    )));
+                }
+
+                let line_number: usize = line_part.parse().map_err(|_| {
+                    Error::InvalidArgument(format!(
+                        "target '{}': '{}' is not a valid line number",
+                        target, line_part
+                    ))
+                })?;
+
+                if line_number == 0 {
+                    return Err(Error::InvalidArgument(format!(
+                        "target '{}': line number must be >= 1",
+                        target
+                    )));
+                }
+
+                return Ok((PathBuf::from(file_part), line_number));
+            }
+        }
+        // Fall through: the last segment is a line number (no col present)
+    } else if !last_segment.trim().is_empty() {
+        // Last segment starts with digits but has trailing non-digit content
+        // e.g. "42:7: some editor context" — walk back to find the line number
+        // Actually handle: "file:42:7: some text" where last colon is before "some text"
+        // but last_segment is not purely digits.
+        // Try: strip trailing text after space/colon, find line number in second-to-last numeric segment
+        let before_last = &target[..last_colon];
+        if let Some(prev_colon) = before_last.rfind(':') {
+            let prev_segment = &before_last[prev_colon + 1..];
+            if prev_segment.trim().chars().all(|c| c.is_ascii_digit())
+                && !prev_segment.trim().is_empty()
+            {
+                // prev_segment is purely digits — check if the segment before it is also digits (col)
+                let before_prev = &before_last[..prev_colon];
+                if let Some(pp_colon) = before_prev.rfind(':') {
+                    let pp_segment = &before_prev[pp_colon + 1..];
+                    if pp_segment.trim().chars().all(|c| c.is_ascii_digit())
+                        && !pp_segment.trim().is_empty()
+                    {
+                        // file:line:col: trailing text
+                        let file_part = &before_prev[..pp_colon];
+                        let line_part = pp_segment.trim();
+
+                        if !file_part.is_empty() {
+                            let line_number: usize = line_part.parse().map_err(|_| {
+                                Error::InvalidArgument(format!(
+                                    "target '{}': '{}' is not a valid line number",
+                                    target, line_part
+                                ))
+                            })?;
+                            if line_number > 0 {
+                                return Ok((PathBuf::from(file_part), line_number));
+                            }
+                        }
+                    }
+                }
+                // prev_segment is line, last_segment is trailing text (not digits)
+                let file_part = &before_prev;
+                let line_part = prev_segment.trim();
+                if !file_part.is_empty() {
+                    let line_number: usize = line_part.parse().map_err(|_| {
+                        Error::InvalidArgument(format!(
+                            "target '{}': '{}' is not a valid line number",
+                            target, line_part
+                        ))
+                    })?;
+                    if line_number > 0 {
+                        return Ok((PathBuf::from(*file_part), line_number));
+                    }
+                }
+            }
+        }
+    }
+
+    // Standard file:line parsing
+    let file_part = &target[..last_colon];
+    let line_part = last_segment.trim();
 
     if file_part.is_empty() {
         return Err(Error::InvalidArgument(format!(
@@ -214,14 +294,41 @@ pub fn parse_target(target: &str) -> Result<(PathBuf, usize)> {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: find_matching_lines
+// ---------------------------------------------------------------------------
+
+/// Scan a file line-by-line and return all (1-based line number, line content)
+/// pairs where the line contains `pattern` as a substring (case-sensitive).
+pub fn find_matching_lines(file: &Path, pattern: &str) -> Result<Vec<(usize, String)>> {
+    let content = std::fs::read_to_string(file).map_err(|e| Error::Io {
+        source: e,
+        path: Some(file.to_path_buf()),
+    })?;
+
+    let matches = content
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains(pattern))
+        .map(|(i, line)| (i + 1, line.to_string()))
+        .collect();
+
+    Ok(matches)
+}
+
+// ---------------------------------------------------------------------------
 // Helper: resolve_date
 // ---------------------------------------------------------------------------
 
 /// Resolve the expiry `NaiveDate` from the `--date` or `--in-days` arguments.
+///
+/// When both are None:
+/// - If `yes` is true: default to 90 days silently (prints a notice)
+/// - If `yes` is false: prompt the user for a number of days (default 90)
 pub fn resolve_date(
     date_str: Option<&str>,
     in_days: Option<u32>,
     today: NaiveDate,
+    yes: bool,
 ) -> Result<NaiveDate> {
     match (date_str, in_days) {
         (Some(s), _) => NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| {
@@ -232,9 +339,43 @@ pub fn resolve_date(
             .ok_or_else(|| {
                 Error::InvalidArgument(format!("--in-days {} overflows the calendar", days))
             }),
-        (None, None) => Err(Error::InvalidArgument(
-            "either --date or --in-days is required".to_string(),
-        )),
+        (None, None) => {
+            let days: u32 = if yes {
+                let default_date = today
+                    .checked_add_signed(chrono::Duration::days(90))
+                    .ok_or_else(|| {
+                        Error::InvalidArgument("90-day default overflows the calendar".to_string())
+                    })?;
+                println!(
+                    "No expiry specified; defaulting to 90 days from today ({})",
+                    default_date.format("%Y-%m-%d")
+                );
+                90
+            } else {
+                print!("Expire in how many days? [90]: ");
+                io::stdout().flush().map_err(|e| Error::Io {
+                    source: e,
+                    path: None,
+                })?;
+                let stdin = io::stdin();
+                let mut buf = String::new();
+                stdin.lock().read_line(&mut buf).map_err(|e| Error::Io {
+                    source: e,
+                    path: None,
+                })?;
+                let trimmed = buf.trim();
+                if trimmed.is_empty() {
+                    90
+                } else {
+                    trimmed.parse::<u32>().unwrap_or(90)
+                }
+            };
+            today
+                .checked_add_signed(chrono::Duration::days(days as i64))
+                .ok_or_else(|| {
+                    Error::InvalidArgument(format!("--in-days {} overflows the calendar", days))
+                })
+        }
     }
 }
 
@@ -331,6 +472,10 @@ mod tests {
 
     fn date(s: &str) -> NaiveDate {
         NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    fn today() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 3, 22).unwrap()
     }
 
     // -- detect_comment_style ------------------------------------------------
@@ -475,52 +620,87 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn test_parse_target_accepts_col() {
+        // file:line:col — should return line=42
+        let (path, line) = parse_target("src/foo.rs:42:7").unwrap();
+        assert_eq!(path, PathBuf::from("src/foo.rs"));
+        assert_eq!(line, 42);
+    }
+
+    #[test]
+    fn test_parse_target_accepts_col_and_message() {
+        // file:line:col: trailing message — should return line=42
+        let (path, line) = parse_target("src/foo.rs:42:7: some editor context").unwrap();
+        assert_eq!(path, PathBuf::from("src/foo.rs"));
+        assert_eq!(line, 42);
+    }
+
     // -- resolve_date --------------------------------------------------------
 
     #[test]
     fn test_resolve_date_from_date_str() {
-        let today = date("2025-06-01");
-        let result = resolve_date(Some("2026-09-01"), None, today).unwrap();
+        let t = date("2025-06-01");
+        let result = resolve_date(Some("2026-09-01"), None, t, true).unwrap();
         assert_eq!(result, date("2026-09-01"));
     }
 
     #[test]
     fn test_resolve_date_from_in_days() {
-        let today = date("2025-06-01");
-        let result = resolve_date(None, Some(90), today).unwrap();
+        let t = date("2025-06-01");
+        let result = resolve_date(None, Some(90), t, true).unwrap();
         assert_eq!(result, date("2025-08-30"));
     }
 
     #[test]
     fn test_resolve_date_in_days_zero() {
-        let today = date("2025-06-01");
-        let result = resolve_date(None, Some(0), today).unwrap();
-        assert_eq!(result, today);
+        let t = date("2025-06-01");
+        let result = resolve_date(None, Some(0), t, true).unwrap();
+        assert_eq!(result, t);
     }
 
     #[test]
-    fn test_resolve_date_neither_is_error() {
-        let today = date("2025-06-01");
-        let result = resolve_date(None, None, today);
-        assert!(result.is_err());
-        let msg = format!("{}", result.unwrap_err());
-        assert!(msg.contains("--date") || msg.contains("--in-days"));
+    fn test_resolve_date_neither_yes_defaults_90() {
+        // When neither --date nor --in-days and yes=true, defaults to 90 days
+        let t = today();
+        let result = resolve_date(None, None, t, true).unwrap();
+        let expected = t.checked_add_signed(chrono::Duration::days(90)).unwrap();
+        assert_eq!(result, expected);
     }
 
     #[test]
     fn test_resolve_date_prefers_date_str_over_in_days() {
-        // --date wins when both are given (clap should prevent this, but
-        // our function still handles it gracefully by taking date_str first)
-        let today = date("2025-06-01");
-        let result = resolve_date(Some("2099-01-01"), Some(5), today).unwrap();
+        let t = date("2025-06-01");
+        let result = resolve_date(Some("2099-01-01"), Some(5), t, true).unwrap();
         assert_eq!(result, date("2099-01-01"));
     }
 
     #[test]
     fn test_resolve_date_invalid_format() {
-        let today = date("2025-06-01");
-        let result = resolve_date(Some("01-09-2026"), None, today);
+        let t = date("2025-06-01");
+        let result = resolve_date(Some("01-09-2026"), None, t, true);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_add_default_days_yes() {
+        // Neither --date nor --in-days, yes=true → defaults to 90 days
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let target = format!("{}:1", file.display());
+
+        let t = today();
+        let result = run_add(&target, "TODO", None, None, None, true, "msg", t, None);
+        assert!(result.is_ok());
+
+        let written = std::fs::read_to_string(&file).unwrap();
+        let expected_date = t
+            .checked_add_signed(chrono::Duration::days(90))
+            .unwrap()
+            .format("%Y-%m-%d")
+            .to_string();
+        assert!(written.contains(&expected_date));
     }
 
     // -- insert_line ---------------------------------------------------------
@@ -577,11 +757,44 @@ mod tests {
         assert!(result.ends_with('\n'), "result should end with a newline");
     }
 
+    // -- find_matching_lines -------------------------------------------------
+
+    #[test]
+    fn test_find_matching_lines_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "line one\ncontains_pattern here\nline three\n").unwrap();
+        let matches = find_matching_lines(&file, "contains_pattern").unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].0, 2);
+        assert!(matches[0].1.contains("contains_pattern"));
+    }
+
+    #[test]
+    fn test_find_matching_lines_multiple() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "foo bar\nfoo baz\nno match\n").unwrap();
+        let matches = find_matching_lines(&file, "foo").unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].0, 1);
+        assert_eq!(matches[1].0, 2);
+    }
+
+    #[test]
+    fn test_find_matching_lines_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "line one\nline two\n").unwrap();
+        let matches = find_matching_lines(&file, "zzz_no_match").unwrap();
+        assert_eq!(matches.len(), 0);
+    }
+
     // -- run_add (integration tests using tempfile) --------------------------
 
     #[test]
     fn test_run_add_invalid_target_no_colon() {
-        let today = date("2025-06-01");
+        let t = date("2025-06-01");
         let result = run_add(
             "src/nocoton",
             "TODO",
@@ -590,23 +803,23 @@ mod tests {
             None,
             true,
             "msg",
-            today,
+            t,
+            None,
         );
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_run_add_missing_date_and_in_days() {
+    fn test_run_add_missing_date_and_in_days_yes_defaults() {
+        // With yes=true and no date/in_days, should default to 90 days (not error)
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("test.rs");
         std::fs::write(&file, "fn main() {}\n").unwrap();
         let target = format!("{}:1", file.display());
 
-        let today = date("2025-06-01");
-        let result = run_add(&target, "TODO", None, None, None, true, "msg", today);
-        assert!(result.is_err());
-        let msg = format!("{}", result.unwrap_err());
-        assert!(msg.contains("--date") || msg.contains("--in-days"));
+        let t = date("2025-06-01");
+        let result = run_add(&target, "TODO", None, None, None, true, "msg", t, None);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -616,7 +829,7 @@ mod tests {
         std::fs::write(&file, "fn main() {}\n").unwrap();
         let target = format!("{}:999", file.display());
 
-        let today = date("2025-06-01");
+        let t = date("2025-06-01");
         let result = run_add(
             &target,
             "TODO",
@@ -625,7 +838,8 @@ mod tests {
             None,
             true,
             "msg",
-            today,
+            t,
+            None,
         );
         assert!(result.is_err());
     }
@@ -637,7 +851,7 @@ mod tests {
         std::fs::write(&file, "fn foo() {}\nfn bar() {}\n").unwrap();
         let target = format!("{}:1", file.display());
 
-        let today = date("2025-06-01");
+        let t = date("2025-06-01");
         let result = run_add(
             &target,
             "TODO",
@@ -646,7 +860,8 @@ mod tests {
             None,
             true, // --yes: skip prompt
             "remove foo after migration",
-            today,
+            t,
+            None,
         );
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
@@ -666,7 +881,7 @@ mod tests {
         std::fs::write(&file, "def foo():\n    pass\n").unwrap();
         let target = format!("{}:2", file.display());
 
-        let today = date("2025-06-01");
+        let t = date("2025-06-01");
         let result = run_add(
             &target,
             "FIXME",
@@ -675,7 +890,8 @@ mod tests {
             Some(30),
             true,
             "clean this up",
-            today,
+            t,
+            None,
         );
         assert!(result.is_ok());
 
@@ -696,7 +912,7 @@ mod tests {
         // line count is 2; line 3 = append
         let target = format!("{}:3", file.display());
 
-        let today = date("2025-06-01");
+        let t = date("2025-06-01");
         let result = run_add(
             &target,
             "TODO",
@@ -705,7 +921,8 @@ mod tests {
             None,
             true,
             "appended",
-            today,
+            t,
+            None,
         );
         assert!(result.is_ok());
 
@@ -717,7 +934,7 @@ mod tests {
 
     #[test]
     fn test_run_add_nonexistent_file_returns_io_error() {
-        let today = date("2025-06-01");
+        let t = date("2025-06-01");
         let result = run_add(
             "/nonexistent/path/file.rs:1",
             "TODO",
@@ -726,12 +943,83 @@ mod tests {
             None,
             true,
             "msg",
-            today,
+            t,
+            None,
         );
         assert!(result.is_err());
         match result.unwrap_err() {
             Error::Io { .. } => {}
             other => panic!("expected Io error, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_run_add_with_search_single_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "fn alpha() {}\nfn legacy_auth() {}\nfn gamma() {}\n").unwrap();
+
+        let t = today();
+        let result = run_add(
+            file.to_str().unwrap(),
+            "TODO",
+            None,
+            Some("2027-01-01"),
+            None,
+            true,
+            "remove legacy auth",
+            t,
+            Some("legacy_auth"),
+        );
+        assert!(result.is_ok());
+
+        let written = std::fs::read_to_string(&file).unwrap();
+        assert!(written.contains("TODO[2027-01-01]: remove legacy auth"));
+    }
+
+    #[test]
+    fn test_run_add_with_search_no_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "fn alpha() {}\nfn beta() {}\n").unwrap();
+
+        let t = today();
+        let result = run_add(
+            file.to_str().unwrap(),
+            "TODO",
+            None,
+            Some("2027-01-01"),
+            None,
+            true,
+            "msg",
+            t,
+            Some("zzz_no_match"),
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("no lines matching"));
+    }
+
+    #[test]
+    fn test_run_add_with_search_multiple_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "fn foo_a() {}\nfn foo_b() {}\nfn bar() {}\n").unwrap();
+
+        let t = today();
+        let result = run_add(
+            file.to_str().unwrap(),
+            "TODO",
+            None,
+            Some("2027-01-01"),
+            None,
+            true,
+            "msg",
+            t,
+            Some("foo"),
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("matched") || msg.contains("2 lines"));
     }
 }
