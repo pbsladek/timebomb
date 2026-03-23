@@ -3,17 +3,17 @@
 #
 # All fields are optional — omitting a field uses the built-in default.
 
-# Tags to scan for. Only annotations whose tag appears in this list will be
+# Trigger tags to scan for. Only fuses whose tag appears in this list will be
 # reported. Tags are matched case-insensitively, but stored uppercased.
 #
 # Default: ["TODO", "FIXME", "HACK", "TEMP", "REMOVEME"]
-tags = ["TODO", "FIXME", "HACK", "TEMP", "REMOVEME"]
+triggers = ["TODO", "FIXME", "HACK", "TEMP", "REMOVEME"]
 
-# Warn (and optionally fail with --fail-on-warn) if an annotation's deadline
-# is within this many days. Set to 0 to disable warnings.
+# Warn (and optionally fail with --fail-on-ticking) if a fuse's deadline is
+# within this many days. Set to 0 to disable the ticking window.
 #
 # Default: 0
-warn_within_days = 14
+fuse_days = 14
 
 # Glob patterns for paths to exclude from scanning. Patterns are matched
 # against the path relative to the scan root. Use ** for recursive matching.

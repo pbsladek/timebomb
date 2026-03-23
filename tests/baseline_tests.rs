@@ -1,4 +1,4 @@
-//! Integration tests for the `timebomb baseline` feature and ratchet enforcement.
+//! Integration tests for the `timebomb bunker` feature and ratchet enforcement.
 
 use std::io::Write as _;
 use std::path::Path;
@@ -32,33 +32,33 @@ fn write_config(content: &str) -> tempfile::TempDir {
 // ─── Config field tests ───────────────────────────────────────────────────────
 
 #[test]
-fn test_config_max_expired_parsed() {
-    let dir = write_config("max_expired = 5\n");
+fn test_config_max_detonated_parsed() {
+    let dir = write_config("max_detonated = 5\n");
     let cfg = load_config(dir.path(), &no_overrides()).unwrap();
-    assert_eq!(cfg.max_expired, Some(5));
+    assert_eq!(cfg.max_detonated, Some(5));
 }
 
 #[test]
-fn test_config_max_expiring_soon_parsed() {
-    let dir = write_config("max_expiring_soon = 10\n");
+fn test_config_max_ticking_parsed() {
+    let dir = write_config("max_ticking = 10\n");
     let cfg = load_config(dir.path(), &no_overrides()).unwrap();
-    assert_eq!(cfg.max_expiring_soon, Some(10));
+    assert_eq!(cfg.max_ticking, Some(10));
 }
 
 #[test]
 fn test_config_max_fields_default_none() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = load_config(dir.path(), &no_overrides()).unwrap();
-    assert_eq!(cfg.max_expired, None);
-    assert_eq!(cfg.max_expiring_soon, None);
+    assert_eq!(cfg.max_detonated, None);
+    assert_eq!(cfg.max_ticking, None);
 }
 
 #[test]
 fn test_config_both_max_fields_parsed() {
-    let dir = write_config("max_expired = 3\nmax_expiring_soon = 7\n");
+    let dir = write_config("max_detonated = 3\nmax_ticking = 7\n");
     let cfg = load_config(dir.path(), &no_overrides()).unwrap();
-    assert_eq!(cfg.max_expired, Some(3));
-    assert_eq!(cfg.max_expiring_soon, Some(7));
+    assert_eq!(cfg.max_detonated, Some(3));
+    assert_eq!(cfg.max_ticking, Some(7));
 }
 
 // ─── baseline save tests ──────────────────────────────────────────────────────
@@ -67,7 +67,7 @@ fn test_config_both_max_fields_parsed() {
 fn test_baseline_save_creates_file() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Write a file with one expired annotation
+    // Write a file with one detonated fuse
     let mut f = std::fs::File::create(dir.path().join("main.rs")).unwrap();
     writeln!(f, "// TODO[2020-01-01]: expired").unwrap();
 
@@ -88,8 +88,8 @@ fn test_baseline_save_creates_file() {
     // File must exist and be parseable
     assert!(baseline_path.exists());
     let loaded = load_baseline(&baseline_path).unwrap().unwrap();
-    assert_eq!(loaded.expired, 1);
-    assert_eq!(loaded.expiring_soon, 0);
+    assert_eq!(loaded.detonated, 1);
+    assert_eq!(loaded.ticking, 0);
     assert_eq!(loaded.generated_at, generated_at);
 }
 
@@ -102,38 +102,38 @@ fn test_baseline_save_empty_dir_writes_zeros() {
     run_baseline_save(dir.path(), &cfg, fixed_today(), &baseline_path, "ts").unwrap();
 
     let loaded = load_baseline(&baseline_path).unwrap().unwrap();
-    assert_eq!(loaded.expired, 0);
-    assert_eq!(loaded.expiring_soon, 0);
+    assert_eq!(loaded.detonated, 0);
+    assert_eq!(loaded.ticking, 0);
 }
 
-// ─── baseline ratchet enforcement via `check` ─────────────────────────────────
+// ─── baseline ratchet enforcement via `sweep` ─────────────────────────────────
 
 #[test]
-fn test_check_exits_one_when_ratchet_violated() {
+fn test_sweep_exits_one_when_ratchet_violated() {
     use clap::Parser;
 
     let dir = tempfile::tempdir().unwrap();
 
-    // Save a baseline with 0 expired
+    // Save a baseline with 0 detonated
     {
         let baseline = Baseline {
             generated_at: "2025-01-01T00:00:00Z".to_string(),
-            expired: 0,
-            expiring_soon: 0,
+            detonated: 0,
+            ticking: 0,
         };
         timebomb::baseline::save_baseline(&baseline, &dir.path().join(".timebomb-baseline.json"))
             .unwrap();
     }
 
-    // Write a file with 1 expired annotation — violates baseline
+    // Write a file with 1 detonated fuse — violates baseline
     {
         let mut f = std::fs::File::create(dir.path().join("main.rs")).unwrap();
         writeln!(f, "// TODO[2020-01-01]: expired").unwrap();
     }
 
-    let cli = Cli::parse_from(["timebomb", "check", dir.path().to_str().unwrap()]);
+    let cli = Cli::parse_from(["timebomb", "sweep", dir.path().to_str().unwrap()]);
     // run is private; invoke via the binary entry point through the public API instead
-    // by constructing the args and calling check directly via library code
+    // by constructing the args and calling sweep directly via library code
     let cfg = load_config(dir.path(), &no_overrides()).unwrap();
     let result = timebomb::scanner::scan(dir.path(), &cfg, fixed_today()).unwrap();
     let baseline = load_baseline(&dir.path().join(".timebomb-baseline.json"))
@@ -141,11 +141,11 @@ fn test_check_exits_one_when_ratchet_violated() {
         .unwrap();
 
     let violations = check_ratchet(
-        result.expired().len(),
-        result.expiring_soon().len(),
+        result.detonated().len(),
+        result.ticking().len(),
         Some(&baseline),
-        cfg.max_expired,
-        cfg.max_expiring_soon,
+        cfg.max_detonated,
+        cfg.max_ticking,
     );
     assert!(!violations.is_empty(), "ratchet should be violated");
     // Also confirm cli parses without error
@@ -153,21 +153,21 @@ fn test_check_exits_one_when_ratchet_violated() {
 }
 
 #[test]
-fn test_check_exits_zero_within_baseline() {
+fn test_sweep_exits_zero_within_baseline() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Save a baseline with 2 expired
+    // Save a baseline with 2 detonated
     {
         let baseline = Baseline {
             generated_at: "2025-01-01T00:00:00Z".to_string(),
-            expired: 2,
-            expiring_soon: 0,
+            detonated: 2,
+            ticking: 0,
         };
         timebomb::baseline::save_baseline(&baseline, &dir.path().join(".timebomb-baseline.json"))
             .unwrap();
     }
 
-    // Write a file with exactly 2 expired annotations — same as baseline
+    // Write a file with exactly 2 detonated fuses — same as baseline
     {
         let mut f = std::fs::File::create(dir.path().join("main.rs")).unwrap();
         writeln!(f, "// TODO[2020-01-01]: expired one").unwrap();
@@ -181,11 +181,11 @@ fn test_check_exits_zero_within_baseline() {
         .unwrap();
 
     let violations = check_ratchet(
-        result.expired().len(),
-        result.expiring_soon().len(),
+        result.detonated().len(),
+        result.ticking().len(),
         Some(&baseline),
-        cfg.max_expired,
-        cfg.max_expiring_soon,
+        cfg.max_detonated,
+        cfg.max_ticking,
     );
     assert!(
         violations.is_empty(),
@@ -223,123 +223,123 @@ fn test_baseline_show_with_file_exits_zero() {
 // ─── CLI parsing tests ────────────────────────────────────────────────────────
 
 #[test]
-fn test_cli_baseline_save_defaults() {
+fn test_cli_bunker_save_defaults() {
     use clap::Parser;
     use timebomb::cli::{BaselineCommand, Command};
 
-    let cli = Cli::parse_from(["timebomb", "baseline", "save"]);
+    let cli = Cli::parse_from(["timebomb", "bunker", "save"]);
     match cli.command {
-        Command::Baseline(args) => match args.command {
+        Command::Bunker(args) => match args.command {
             BaselineCommand::Save(a) => {
                 assert_eq!(a.path, ".");
                 assert_eq!(a.baseline_file, ".timebomb-baseline.json");
                 assert!(a.config.is_none());
-                assert!(a.warn_within.is_none());
+                assert!(a.fuse.is_none());
             }
             _ => panic!("expected Save"),
         },
-        _ => panic!("expected Baseline"),
+        _ => panic!("expected Bunker"),
     }
 }
 
 #[test]
-fn test_cli_baseline_show_defaults() {
+fn test_cli_bunker_show_defaults() {
     use clap::Parser;
     use timebomb::cli::{BaselineCommand, Command};
 
-    let cli = Cli::parse_from(["timebomb", "baseline", "show"]);
+    let cli = Cli::parse_from(["timebomb", "bunker", "show"]);
     match cli.command {
-        Command::Baseline(args) => match args.command {
+        Command::Bunker(args) => match args.command {
             BaselineCommand::Show(a) => {
                 assert_eq!(a.path, ".");
                 assert_eq!(a.baseline_file, ".timebomb-baseline.json");
                 assert!(a.config.is_none());
-                assert!(a.warn_within.is_none());
+                assert!(a.fuse.is_none());
             }
             _ => panic!("expected Show"),
         },
-        _ => panic!("expected Baseline"),
+        _ => panic!("expected Bunker"),
     }
 }
 
 #[test]
-fn test_cli_baseline_save_custom_file() {
+fn test_cli_bunker_save_custom_file() {
     use clap::Parser;
     use timebomb::cli::{BaselineCommand, Command};
 
     let cli = Cli::parse_from([
         "timebomb",
-        "baseline",
+        "bunker",
         "save",
         "--baseline-file",
         "custom.json",
     ]);
     match cli.command {
-        Command::Baseline(args) => match args.command {
+        Command::Bunker(args) => match args.command {
             BaselineCommand::Save(a) => {
                 assert_eq!(a.baseline_file, "custom.json");
             }
             _ => panic!("expected Save"),
         },
-        _ => panic!("expected Baseline"),
+        _ => panic!("expected Bunker"),
     }
 }
 
 #[test]
-fn test_cli_baseline_show_custom_file() {
+fn test_cli_bunker_show_custom_file() {
     use clap::Parser;
     use timebomb::cli::{BaselineCommand, Command};
 
     let cli = Cli::parse_from([
         "timebomb",
-        "baseline",
+        "bunker",
         "show",
         "--baseline-file",
         "custom.json",
     ]);
     match cli.command {
-        Command::Baseline(args) => match args.command {
+        Command::Bunker(args) => match args.command {
             BaselineCommand::Show(a) => {
                 assert_eq!(a.baseline_file, "custom.json");
             }
             _ => panic!("expected Show"),
         },
-        _ => panic!("expected Baseline"),
+        _ => panic!("expected Bunker"),
     }
 }
 
 #[test]
-fn test_cli_baseline_save_with_path_and_warn_within() {
+fn test_cli_bunker_save_with_path_and_fuse() {
     use clap::Parser;
     use timebomb::cli::{BaselineCommand, Command};
 
     let cli = Cli::parse_from([
         "timebomb",
-        "baseline",
+        "bunker",
         "save",
         "./src",
-        "--warn-within",
+        "--fuse",
         "14d",
     ]);
     match cli.command {
-        Command::Baseline(args) => match args.command {
+        Command::Bunker(args) => match args.command {
             BaselineCommand::Save(a) => {
                 assert_eq!(a.path, "./src");
-                assert_eq!(a.warn_within, Some("14d".to_string()));
+                assert_eq!(a.fuse, Some("14d".to_string()));
             }
             _ => panic!("expected Save"),
         },
-        _ => panic!("expected Baseline"),
+        _ => panic!("expected Bunker"),
     }
 }
 
-// ─── max_expired config ratchet tests ─────────────────────────────────────────
+// ─── max_detonated config ratchet tests ─────────────────────────────────────────
 
 #[test]
-fn test_ratchet_max_expired_from_config_causes_violation() {
-    let dir = write_config("max_expired = 0\n");
+fn test_ratchet_max_detonated_from_config_causes_violation() {
+    let dir = write_config("max_detonated = 0\n");
 
-    // Write a file with 1 expired annotation — exceeds max_expired=0
+    // Write a file with 1 detonated fuse — exceeds max_detonated=0
     {
         let mut f = std::fs::File::create(dir.path().join("main.rs")).unwrap();
         writeln!(f, "// TODO[2020-01-01]: expired").unwrap();
@@ -349,23 +349,23 @@ fn test_ratchet_max_expired_from_config_causes_violation() {
     let result = timebomb::scanner::scan(dir.path(), &cfg, fixed_today()).unwrap();
 
     let violations = check_ratchet(
-        result.expired().len(),
-        result.expiring_soon().len(),
+        result.detonated().len(),
+        result.ticking().len(),
         None,
-        cfg.max_expired,
-        cfg.max_expiring_soon,
+        cfg.max_detonated,
+        cfg.max_ticking,
     );
     assert!(
         !violations.is_empty(),
-        "should violate max_expired=0 with 1 expired"
+        "should violate max_detonated=0 with 1 detonated"
     );
 }
 
 #[test]
-fn test_ratchet_max_expired_from_config_no_violation_at_limit() {
-    let dir = write_config("max_expired = 1\n");
+fn test_ratchet_max_detonated_from_config_no_violation_at_limit() {
+    let dir = write_config("max_detonated = 1\n");
 
-    // Write a file with 1 expired annotation — exactly at limit
+    // Write a file with 1 detonated fuse — exactly at limit
     {
         let mut f = std::fs::File::create(dir.path().join("main.rs")).unwrap();
         writeln!(f, "// TODO[2020-01-01]: expired").unwrap();
@@ -375,15 +375,15 @@ fn test_ratchet_max_expired_from_config_no_violation_at_limit() {
     let result = timebomb::scanner::scan(dir.path(), &cfg, fixed_today()).unwrap();
 
     let violations = check_ratchet(
-        result.expired().len(),
-        result.expiring_soon().len(),
+        result.detonated().len(),
+        result.ticking().len(),
         None,
-        cfg.max_expired,
-        cfg.max_expiring_soon,
+        cfg.max_detonated,
+        cfg.max_ticking,
     );
     assert!(
         violations.is_empty(),
-        "should not violate max_expired=1 with 1 expired: {:?}",
+        "should not violate max_detonated=1 with 1 detonated: {:?}",
         violations
     );
 }
@@ -400,11 +400,11 @@ fn test_check_ratchet_all_zero_no_baseline() {
 fn test_check_ratchet_four_violations_at_once() {
     let baseline = Baseline {
         generated_at: "2025-01-01T00:00:00Z".to_string(),
-        expired: 1,
-        expiring_soon: 1,
+        detonated: 1,
+        ticking: 1,
     };
-    // expired=5 > max_expired=2 AND > baseline=1
-    // expiring_soon=10 > max_expiring_soon=5 AND > baseline=1
+    // detonated=5 > max_detonated=2 AND > baseline=1
+    // ticking=10 > max_ticking=5 AND > baseline=1
     let violations = check_ratchet(5, 10, Some(&baseline), Some(2), Some(5));
     assert_eq!(violations.len(), 4);
 }
@@ -413,8 +413,8 @@ fn test_check_ratchet_four_violations_at_once() {
 fn test_check_ratchet_baseline_equal_not_violated() {
     let baseline = Baseline {
         generated_at: "2025-01-01T00:00:00Z".to_string(),
-        expired: 3,
-        expiring_soon: 2,
+        detonated: 3,
+        ticking: 2,
     };
     // Equal counts should not trigger ratchet
     let violations = check_ratchet(3, 2, Some(&baseline), None, None);
@@ -430,14 +430,14 @@ fn test_load_baseline_from_saved() {
 
     let original = Baseline {
         generated_at: "2025-06-01T00:00:00+00:00".to_string(),
-        expired: 7,
-        expiring_soon: 3,
+        detonated: 7,
+        ticking: 3,
     };
     timebomb::baseline::save_baseline(&original, &path).unwrap();
 
     let loaded = load_baseline(&path).unwrap().unwrap();
-    assert_eq!(loaded.expired, 7);
-    assert_eq!(loaded.expiring_soon, 3);
+    assert_eq!(loaded.detonated, 7);
+    assert_eq!(loaded.ticking, 3);
     assert_eq!(loaded.generated_at, original.generated_at);
 }
 
@@ -449,15 +449,15 @@ fn test_baseline_file_is_json() {
 
     let baseline = Baseline {
         generated_at: "2025-01-01T00:00:00Z".to_string(),
-        expired: 1,
-        expiring_soon: 2,
+        detonated: 1,
+        ticking: 2,
     };
     timebomb::baseline::save_baseline(&baseline, &path).unwrap();
 
     let content = std::fs::read_to_string(&path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-    assert_eq!(parsed["expired"], 1);
-    assert_eq!(parsed["expiring_soon"], 2);
+    assert_eq!(parsed["detonated"], 1);
+    assert_eq!(parsed["ticking"], 2);
     assert_eq!(parsed["generated_at"], "2025-01-01T00:00:00Z");
 }
 

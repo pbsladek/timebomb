@@ -4,7 +4,7 @@
 //! extend the date, delete the line, or skip it. After processing all
 //! annotations it prints a summary.
 
-use crate::annotation::Annotation;
+use crate::annotation::Fuse;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::remove::remove_line;
@@ -62,10 +62,10 @@ pub struct FixSummary {
 pub fn run_fix(scan_path: &Path, cfg: &Config, today: NaiveDate) -> Result<FixSummary> {
     // Pass 1: collect expired annotations -----------------------------------
     let result = scan(scan_path, cfg, today)?;
-    let expired: Vec<&Annotation> = result.expired();
+    let detonated: Vec<&Fuse> = result.detonated();
 
-    if expired.is_empty() {
-        println!("No expired annotations found.");
+    if detonated.is_empty() {
+        println!("No detonated fuses found.");
         return Ok(FixSummary {
             extended: 0,
             deleted: 0,
@@ -74,19 +74,19 @@ pub fn run_fix(scan_path: &Path, cfg: &Config, today: NaiveDate) -> Result<FixSu
     }
 
     println!(
-        "{} expired annotation(s) to review:\n",
-        expired.len().to_string().red().bold()
+        "{} detonated fuse(s) to review:\n",
+        detonated.len().to_string().red().bold()
     );
 
     // Pass 1: prompt the user for each annotation ---------------------------
     let mut decisions: Vec<Decision> = Vec::new();
 
-    for ann in &expired {
+    for ann in &detonated {
         let abs_path = scan_path.join(&ann.file);
 
         println!(
             "{} {}:{}",
-            "[EXPIRED]".red().bold(),
+            "[DETONATED]".red().bold(),
             ann.file.display(),
             ann.line
         );

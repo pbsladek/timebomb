@@ -1,4 +1,4 @@
-use crate::annotation::{Annotation, Status};
+use crate::annotation::{Fuse, Status};
 use crate::output::OutputFormat;
 use colored::Colorize;
 use serde::Serialize;
@@ -9,9 +9,9 @@ use std::collections::HashMap;
 pub struct OwnerRow {
     pub owner: String,
     pub total: usize,
-    pub expired: usize,
-    pub expiring_soon: usize,
-    pub ok: usize,
+    pub detonated: usize,
+    pub ticking: usize,
+    pub inert: usize,
 }
 
 /// One row in the tag breakdown.
@@ -19,49 +19,49 @@ pub struct OwnerRow {
 pub struct TagRow {
     pub tag: String,
     pub total: usize,
-    pub expired: usize,
-    pub expiring_soon: usize,
-    pub ok: usize,
+    pub detonated: usize,
+    pub ticking: usize,
+    pub inert: usize,
 }
 
 /// The complete stats result.
 #[derive(Debug, Serialize)]
 pub struct StatsResult {
-    pub total_annotations: usize,
-    pub total_expired: usize,
-    pub total_expiring_soon: usize,
-    pub total_ok: usize,
+    pub total_fuses: usize,
+    pub total_detonated: usize,
+    pub total_ticking: usize,
+    pub total_inert: usize,
     pub by_owner: Vec<OwnerRow>,
     pub by_tag: Vec<TagRow>,
 }
 
-/// Compute stats from a slice of annotations.
-/// Rows are sorted: expired count descending, then total descending, then name ascending.
-pub fn compute_stats(annotations: &[Annotation]) -> StatsResult {
+/// Compute stats from a slice of fuses.
+/// Rows are sorted: detonated count descending, then total descending, then name ascending.
+pub fn compute_stats(fuses: &[Fuse]) -> StatsResult {
     let mut owner_map: HashMap<String, OwnerRow> = HashMap::new();
     let mut tag_map: HashMap<String, TagRow> = HashMap::new();
 
-    let mut total_annotations = 0usize;
-    let mut total_expired = 0usize;
-    let mut total_expiring_soon = 0usize;
-    let mut total_ok = 0usize;
+    let mut total_fuses = 0usize;
+    let mut total_detonated = 0usize;
+    let mut total_ticking = 0usize;
+    let mut total_inert = 0usize;
 
-    for ann in annotations {
-        let owner_key = ann.owner.clone().unwrap_or_else(|| "(unowned)".to_string());
+    for fuse in fuses {
+        let owner_key = fuse.owner.clone().unwrap_or_else(|| "(unowned)".to_string());
 
-        total_annotations += 1;
+        total_fuses += 1;
 
-        let (is_expired, is_soon, is_ok) = match ann.status {
-            Status::Expired => {
-                total_expired += 1;
+        let (is_detonated, is_ticking, is_inert) = match fuse.status {
+            Status::Detonated => {
+                total_detonated += 1;
                 (1usize, 0usize, 0usize)
             }
-            Status::ExpiringSoon => {
-                total_expiring_soon += 1;
+            Status::Ticking => {
+                total_ticking += 1;
                 (0, 1, 0)
             }
-            Status::Ok => {
-                total_ok += 1;
+            Status::Inert => {
+                total_inert += 1;
                 (0, 0, 1)
             }
         };
@@ -72,50 +72,50 @@ pub fn compute_stats(annotations: &[Annotation]) -> StatsResult {
             .or_insert_with(|| OwnerRow {
                 owner: owner_key,
                 total: 0,
-                expired: 0,
-                expiring_soon: 0,
-                ok: 0,
+                detonated: 0,
+                ticking: 0,
+                inert: 0,
             });
         orow.total += 1;
-        orow.expired += is_expired;
-        orow.expiring_soon += is_soon;
-        orow.ok += is_ok;
+        orow.detonated += is_detonated;
+        orow.ticking += is_ticking;
+        orow.inert += is_inert;
 
         // Update tag row
-        let trow = tag_map.entry(ann.tag.clone()).or_insert_with(|| TagRow {
-            tag: ann.tag.clone(),
+        let trow = tag_map.entry(fuse.tag.clone()).or_insert_with(|| TagRow {
+            tag: fuse.tag.clone(),
             total: 0,
-            expired: 0,
-            expiring_soon: 0,
-            ok: 0,
+            detonated: 0,
+            ticking: 0,
+            inert: 0,
         });
         trow.total += 1;
-        trow.expired += is_expired;
-        trow.expiring_soon += is_soon;
-        trow.ok += is_ok;
+        trow.detonated += is_detonated;
+        trow.ticking += is_ticking;
+        trow.inert += is_inert;
     }
 
     let mut by_owner: Vec<OwnerRow> = owner_map.into_values().collect();
     by_owner.sort_by(|a, b| {
-        b.expired
-            .cmp(&a.expired)
+        b.detonated
+            .cmp(&a.detonated)
             .then(b.total.cmp(&a.total))
             .then(a.owner.cmp(&b.owner))
     });
 
     let mut by_tag: Vec<TagRow> = tag_map.into_values().collect();
     by_tag.sort_by(|a, b| {
-        b.expired
-            .cmp(&a.expired)
+        b.detonated
+            .cmp(&a.detonated)
             .then(b.total.cmp(&a.total))
             .then(a.tag.cmp(&b.tag))
     });
 
     StatsResult {
-        total_annotations,
-        total_expired,
-        total_expiring_soon,
-        total_ok,
+        total_fuses,
+        total_detonated,
+        total_ticking,
+        total_inert,
         by_owner,
         by_tag,
     }
@@ -143,8 +143,8 @@ fn color_enabled() -> bool {
     std::env::var("NO_COLOR").is_err()
 }
 
-/// Format an expired count cell, optionally in red.
-fn fmt_expired(count: usize, use_color: bool) -> String {
+/// Format a detonated count cell, optionally in red.
+fn fmt_detonated(count: usize, use_color: bool) -> String {
     let s = format!("{:>8}", count);
     if use_color && count > 0 {
         s.red().to_string()
@@ -162,7 +162,7 @@ pub fn print_stats_terminal(result: &StatsResult) {
     println!("--------");
     println!(
         "{:<20}{:>8}{:>10}{:>8}{:>8}",
-        "OWNER", "TOTAL", "EXPIRED", "SOON", "OK"
+        "OWNER", "TOTAL", "DETONATED", "TICKING", "INERT"
     );
     for row in &result.by_owner {
         let name = truncate_name(&row.owner);
@@ -170,9 +170,9 @@ pub fn print_stats_terminal(result: &StatsResult) {
             "{:<20}{:>8}{}{:>8}{:>8}",
             name,
             row.total,
-            fmt_expired(row.expired, use_color),
-            row.expiring_soon,
-            row.ok,
+            fmt_detonated(row.detonated, use_color),
+            row.ticking,
+            row.inert,
         );
     }
 
@@ -183,7 +183,7 @@ pub fn print_stats_terminal(result: &StatsResult) {
     println!("------");
     println!(
         "{:<20}{:>8}{:>10}{:>8}{:>8}",
-        "TAG", "TOTAL", "EXPIRED", "SOON", "OK"
+        "TAG", "TOTAL", "DETONATED", "TICKING", "INERT"
     );
     for row in &result.by_tag {
         let name = truncate_name(&row.tag);
@@ -191,16 +191,19 @@ pub fn print_stats_terminal(result: &StatsResult) {
             "{:<20}{:>8}{}{:>8}{:>8}",
             name,
             row.total,
-            fmt_expired(row.expired, use_color),
-            row.expiring_soon,
-            row.ok,
+            fmt_detonated(row.detonated, use_color),
+            row.ticking,
+            row.inert,
         );
     }
 
     println!();
     println!(
-        "{} annotation(s) total · {} expired · {} expiring soon · {} ok",
-        result.total_annotations, result.total_expired, result.total_expiring_soon, result.total_ok,
+        "{} fuse(s) total · {} detonated · {} ticking · {} inert",
+        result.total_fuses,
+        result.total_detonated,
+        result.total_ticking,
+        result.total_inert,
     );
 }
 
@@ -213,18 +216,18 @@ pub fn print_stats_json(result: &StatsResult) {
 /// Print stats in GitHub Actions format.
 pub fn print_stats_github(result: &StatsResult) {
     for row in &result.by_owner {
-        if row.expired > 0 {
+        if row.detonated > 0 {
             println!(
-                "::warning ::OWNER {} has {} expired annotation(s)",
-                row.owner, row.expired
+                "::warning ::OWNER {} has {} detonated fuse(s)",
+                row.owner, row.detonated
             );
         }
     }
     for row in &result.by_tag {
-        if row.expired > 0 {
+        if row.detonated > 0 {
             println!(
-                "::warning ::TAG {} has {} expired annotation(s)",
-                row.tag, row.expired
+                "::warning ::TAG {} has {} detonated fuse(s)",
+                row.tag, row.detonated
             );
         }
     }
@@ -245,13 +248,13 @@ mod tests {
     use chrono::NaiveDate;
     use std::path::PathBuf;
 
-    fn make_annotation(tag: &str, owner: Option<&str>, status: Status) -> Annotation {
+    fn make_fuse(tag: &str, owner: Option<&str>, status: Status) -> Fuse {
         let date = match status {
-            Status::Expired => NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
-            Status::ExpiringSoon => NaiveDate::from_ymd_opt(2025, 6, 10).unwrap(),
-            Status::Ok => NaiveDate::from_ymd_opt(2099, 1, 1).unwrap(),
+            Status::Detonated => NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
+            Status::Ticking => NaiveDate::from_ymd_opt(2025, 6, 10).unwrap(),
+            Status::Inert => NaiveDate::from_ymd_opt(2099, 1, 1).unwrap(),
         };
-        Annotation {
+        Fuse {
             file: PathBuf::from("src/foo.rs"),
             line: 1,
             tag: tag.to_string(),
@@ -266,45 +269,45 @@ mod tests {
     #[test]
     fn test_compute_stats_empty() {
         let result = compute_stats(&[]);
-        assert_eq!(result.total_annotations, 0);
-        assert_eq!(result.total_expired, 0);
-        assert_eq!(result.total_expiring_soon, 0);
-        assert_eq!(result.total_ok, 0);
+        assert_eq!(result.total_fuses, 0);
+        assert_eq!(result.total_detonated, 0);
+        assert_eq!(result.total_ticking, 0);
+        assert_eq!(result.total_inert, 0);
         assert!(result.by_owner.is_empty());
         assert!(result.by_tag.is_empty());
     }
 
     #[test]
-    fn test_compute_stats_single_expired() {
-        let anns = vec![make_annotation("TODO", Some("alice"), Status::Expired)];
-        let result = compute_stats(&anns);
-        assert_eq!(result.total_annotations, 1);
-        assert_eq!(result.total_expired, 1);
-        assert_eq!(result.total_expiring_soon, 0);
-        assert_eq!(result.total_ok, 0);
+    fn test_compute_stats_single_detonated() {
+        let fuses = vec![make_fuse("TODO", Some("alice"), Status::Detonated)];
+        let result = compute_stats(&fuses);
+        assert_eq!(result.total_fuses, 1);
+        assert_eq!(result.total_detonated, 1);
+        assert_eq!(result.total_ticking, 0);
+        assert_eq!(result.total_inert, 0);
 
         assert_eq!(result.by_owner.len(), 1);
-        assert_eq!(result.by_owner[0].expired, 1);
+        assert_eq!(result.by_owner[0].detonated, 1);
 
         assert_eq!(result.by_tag.len(), 1);
-        assert_eq!(result.by_tag[0].expired, 1);
+        assert_eq!(result.by_tag[0].detonated, 1);
     }
 
     #[test]
     fn test_compute_stats_unowned() {
-        let anns = vec![make_annotation("TODO", None, Status::Ok)];
-        let result = compute_stats(&anns);
+        let fuses = vec![make_fuse("TODO", None, Status::Inert)];
+        let result = compute_stats(&fuses);
         assert_eq!(result.by_owner.len(), 1);
         assert_eq!(result.by_owner[0].owner, "(unowned)");
     }
 
     #[test]
     fn test_compute_stats_owner_grouping() {
-        let anns = vec![
-            make_annotation("TODO", Some("alice"), Status::Ok),
-            make_annotation("FIXME", Some("alice"), Status::Expired),
+        let fuses = vec![
+            make_fuse("TODO", Some("alice"), Status::Inert),
+            make_fuse("FIXME", Some("alice"), Status::Detonated),
         ];
-        let result = compute_stats(&anns);
+        let result = compute_stats(&fuses);
         assert_eq!(result.by_owner.len(), 1);
         assert_eq!(result.by_owner[0].owner, "alice");
         assert_eq!(result.by_owner[0].total, 2);
@@ -312,11 +315,11 @@ mod tests {
 
     #[test]
     fn test_compute_stats_tag_grouping() {
-        let anns = vec![
-            make_annotation("TODO", Some("alice"), Status::Ok),
-            make_annotation("TODO", Some("bob"), Status::Expired),
+        let fuses = vec![
+            make_fuse("TODO", Some("alice"), Status::Inert),
+            make_fuse("TODO", Some("bob"), Status::Detonated),
         ];
-        let result = compute_stats(&anns);
+        let result = compute_stats(&fuses);
         assert_eq!(result.by_tag.len(), 1);
         assert_eq!(result.by_tag[0].tag, "TODO");
         assert_eq!(result.by_tag[0].total, 2);
@@ -324,19 +327,19 @@ mod tests {
 
     #[test]
     fn test_compute_stats_sort_order() {
-        let anns = vec![
-            make_annotation("TODO", Some("alice"), Status::Expired),
-            make_annotation("TODO", Some("alice"), Status::Expired),
-            make_annotation("TODO", Some("alice"), Status::Expired),
-            make_annotation("TODO", Some("bob"), Status::Expired),
+        let fuses = vec![
+            make_fuse("TODO", Some("alice"), Status::Detonated),
+            make_fuse("TODO", Some("alice"), Status::Detonated),
+            make_fuse("TODO", Some("alice"), Status::Detonated),
+            make_fuse("TODO", Some("bob"), Status::Detonated),
         ];
-        let result = compute_stats(&anns);
+        let result = compute_stats(&fuses);
         assert_eq!(result.by_owner.len(), 2);
-        // alice has 3 expired, bob has 1 — alice should come first
+        // alice has 3 detonated, bob has 1 — alice should come first
         assert_eq!(result.by_owner[0].owner, "alice");
-        assert_eq!(result.by_owner[0].expired, 3);
+        assert_eq!(result.by_owner[0].detonated, 3);
         assert_eq!(result.by_owner[1].owner, "bob");
-        assert_eq!(result.by_owner[1].expired, 1);
+        assert_eq!(result.by_owner[1].detonated, 1);
     }
 
     #[test]
@@ -360,32 +363,32 @@ mod tests {
 
     #[test]
     fn test_print_stats_json_does_not_panic() {
-        let anns = vec![
-            make_annotation("TODO", Some("alice"), Status::Expired),
-            make_annotation("FIXME", None, Status::Ok),
+        let fuses = vec![
+            make_fuse("TODO", Some("alice"), Status::Detonated),
+            make_fuse("FIXME", None, Status::Inert),
         ];
-        let result = compute_stats(&anns);
+        let result = compute_stats(&fuses);
         print_stats_json(&result);
     }
 
     #[test]
     fn test_print_stats_terminal_does_not_panic() {
-        let anns = vec![
-            make_annotation("TODO", Some("alice"), Status::Expired),
-            make_annotation("FIXME", None, Status::ExpiringSoon),
-            make_annotation("HACK", Some("bob"), Status::Ok),
+        let fuses = vec![
+            make_fuse("TODO", Some("alice"), Status::Detonated),
+            make_fuse("FIXME", None, Status::Ticking),
+            make_fuse("HACK", Some("bob"), Status::Inert),
         ];
-        let result = compute_stats(&anns);
+        let result = compute_stats(&fuses);
         print_stats_terminal(&result);
     }
 
     #[test]
     fn test_print_stats_github_does_not_panic() {
-        let anns = vec![
-            make_annotation("TODO", Some("alice"), Status::Expired),
-            make_annotation("FIXME", None, Status::Ok),
+        let fuses = vec![
+            make_fuse("TODO", Some("alice"), Status::Detonated),
+            make_fuse("FIXME", None, Status::Inert),
         ];
-        let result = compute_stats(&anns);
+        let result = compute_stats(&fuses);
         print_stats_github(&result);
     }
 }

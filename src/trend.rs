@@ -6,20 +6,20 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::path::Path;
 
-/// Summary of how annotation debt has changed between two report snapshots.
+/// Summary of how fuse debt has changed between two report snapshots.
 #[derive(Debug, Serialize)]
 pub struct TrendResult {
     pub from_timestamp: String,
     pub to_timestamp: String,
-    /// Positive = more expired (worse), negative = fewer (better).
-    pub expired_delta: i64,
-    pub expiring_soon_delta: i64,
+    /// Positive = more detonated (worse), negative = fewer (better).
+    pub detonated_delta: i64,
+    pub ticking_delta: i64,
     pub total_delta: i64,
-    /// Annotations in B.expired whose file:line key is not in A.expired.
-    pub newly_expired: Vec<ReportAnnotation>,
-    /// Annotations in A.expired whose file:line key is absent from B entirely.
+    /// Fuses in B.detonated whose file:line key is not in A.detonated.
+    pub newly_detonated: Vec<ReportAnnotation>,
+    /// Fuses in A.detonated whose file:line key is absent from B entirely.
     pub resolved: Vec<ReportAnnotation>,
-    /// Annotations in A.expired that are now in B.expiring_soon (deadline bumped).
+    /// Fuses in A.detonated that are now in B.ticking (deadline bumped).
     pub snoozed: Vec<ReportAnnotation>,
 }
 
@@ -36,7 +36,7 @@ fn load_report(path: &Path) -> Result<Report> {
     })
 }
 
-/// A simple key identifying a unique annotation location.
+/// A simple key identifying a unique fuse location.
 fn annotation_key(a: &ReportAnnotation) -> String {
     format!("{}:{}", a.file, a.line)
 }
@@ -48,54 +48,54 @@ fn key_set(anns: &[ReportAnnotation]) -> HashSet<String> {
 // ─── Core computation ─────────────────────────────────────────────────────────
 
 pub fn compute_trend(a: &Report, b: &Report) -> TrendResult {
-    let a_expired_keys = key_set(&a.expired);
-    let b_expired_keys = key_set(&b.expired);
-    let b_expiring_soon_keys = key_set(&b.expiring_soon);
-    let b_ok_keys = key_set(&b.ok);
+    let a_detonated_keys = key_set(&a.detonated);
+    let b_detonated_keys = key_set(&b.detonated);
+    let b_ticking_keys = key_set(&b.ticking);
+    let b_inert_keys = key_set(&b.inert);
 
     // All keys that exist anywhere in B.
     // Use &str references into the already-owned keys to avoid cloning them again.
-    let b_all_keys: HashSet<&str> = b_expired_keys
+    let b_all_keys: HashSet<&str> = b_detonated_keys
         .iter()
-        .chain(b_expiring_soon_keys.iter())
-        .chain(b_ok_keys.iter())
+        .chain(b_ticking_keys.iter())
+        .chain(b_inert_keys.iter())
         .map(String::as_str)
         .collect();
 
-    let newly_expired: Vec<ReportAnnotation> = b
-        .expired
+    let newly_detonated: Vec<ReportAnnotation> = b
+        .detonated
         .iter()
-        .filter(|ann| !a_expired_keys.contains(&annotation_key(ann)))
+        .filter(|ann| !a_detonated_keys.contains(&annotation_key(ann)))
         .cloned()
         .collect();
 
     let resolved: Vec<ReportAnnotation> = a
-        .expired
+        .detonated
         .iter()
         .filter(|ann| !b_all_keys.contains(annotation_key(ann).as_str()))
         .cloned()
         .collect();
 
     let snoozed: Vec<ReportAnnotation> = a
-        .expired
+        .detonated
         .iter()
-        .filter(|ann| b_expiring_soon_keys.contains(&annotation_key(ann)))
+        .filter(|ann| b_ticking_keys.contains(&annotation_key(ann)))
         .cloned()
         .collect();
 
-    let expired_delta = b.expired.len() as i64 - a.expired.len() as i64;
-    let expiring_soon_delta = b.expiring_soon.len() as i64 - a.expiring_soon.len() as i64;
-    let a_total = (a.expired.len() + a.expiring_soon.len() + a.ok.len()) as i64;
-    let b_total = (b.expired.len() + b.expiring_soon.len() + b.ok.len()) as i64;
+    let detonated_delta = b.detonated.len() as i64 - a.detonated.len() as i64;
+    let ticking_delta = b.ticking.len() as i64 - a.ticking.len() as i64;
+    let a_total = (a.detonated.len() + a.ticking.len() + a.inert.len()) as i64;
+    let b_total = (b.detonated.len() + b.ticking.len() + b.inert.len()) as i64;
     let total_delta = b_total - a_total;
 
     TrendResult {
         from_timestamp: a.generated_at.clone(),
         to_timestamp: b.generated_at.clone(),
-        expired_delta,
-        expiring_soon_delta,
+        detonated_delta,
+        ticking_delta,
         total_delta,
-        newly_expired,
+        newly_detonated,
         resolved,
         snoozed,
     }
@@ -143,36 +143,32 @@ fn print_trend_terminal(trend: &TrendResult) {
     println!("Trend: {} → {}", trend.from_timestamp, trend.to_timestamp);
     println!();
 
-    // Helper to compute "was X, now Y"
-    let a_expired = (trend.expired_delta.unsigned_abs()) as i64;
-    let _ = a_expired; // not directly available; we show delta + counts from items
-                       // We don't have the absolute counts in TrendResult, so show what we have.
     println!(
-        "  Expired:       {}",
-        fmt_delta(trend.expired_delta, use_color)
+        "  Detonated:    {}",
+        fmt_delta(trend.detonated_delta, use_color)
     );
     println!(
-        "  Expiring soon: {}",
-        fmt_delta(trend.expiring_soon_delta, use_color)
+        "  Ticking:      {}",
+        fmt_delta(trend.ticking_delta, use_color)
     );
     println!(
-        "  Total:         {}",
+        "  Total:        {}",
         fmt_delta(trend.total_delta, use_color)
     );
     println!();
 
-    // Newly expired
-    let n = trend.newly_expired.len();
-    let header = format!("  Newly expired ({}):", n);
+    // Newly detonated
+    let n = trend.newly_detonated.len();
+    let header = format!("  Newly detonated ({}):", n);
     if use_color && n > 0 {
         println!("{}", header.red().bold());
     } else {
         println!("{}", header);
     }
-    if trend.newly_expired.is_empty() {
+    if trend.newly_detonated.is_empty() {
         println!("    (none)");
     } else {
-        for ann in &trend.newly_expired {
+        for ann in &trend.newly_detonated {
             let line = format!(
                 "    {}:{}  {}[{}]  {}",
                 ann.file, ann.line, ann.tag, ann.date, ann.message
@@ -227,15 +223,15 @@ fn print_trend_terminal(trend: &TrendResult) {
 }
 
 fn print_trend_github(trend: &TrendResult) {
-    for ann in &trend.newly_expired {
+    for ann in &trend.newly_detonated {
         println!(
-            "::error file={},line={}::{} expired on {}: {}",
+            "::error file={},line={}::{} detonated on {}: {}",
             ann.file, ann.line, ann.tag, ann.date, ann.message
         );
     }
     for ann in &trend.resolved {
         println!(
-            "::notice file={},line={}::{} annotation resolved (removed from codebase)",
+            "::notice file={},line={}::{} fuse resolved (removed from codebase)",
             ann.file, ann.line, ann.tag
         );
     }
@@ -266,45 +262,45 @@ mod tests {
             date: date.to_string(),
             owner: None,
             message: format!("message at {}:{}", file, line),
-            status: "expired".to_string(),
+            status: "detonated".to_string(),
         }
     }
 
     fn make_report(
         generated_at: &str,
-        expired: Vec<ReportAnnotation>,
-        expiring_soon: Vec<ReportAnnotation>,
-        ok: Vec<ReportAnnotation>,
+        detonated: Vec<ReportAnnotation>,
+        ticking: Vec<ReportAnnotation>,
+        inert: Vec<ReportAnnotation>,
     ) -> Report {
-        let total = expired.len() + expiring_soon.len() + ok.len();
+        let total = detonated.len() + ticking.len() + inert.len();
         Report {
             generated_at: generated_at.to_string(),
-            scanned_files: 1,
-            total_annotations: total,
-            expired,
-            expiring_soon,
-            ok,
+            swept_files: 1,
+            total_fuses: total,
+            detonated,
+            ticking,
+            inert,
         }
     }
 
     // ── compute_trend ─────────────────────────────────────────────────────────
 
     #[test]
-    fn test_compute_trend_newly_expired() {
+    fn test_compute_trend_newly_detonated() {
         let a = make_report("2025-01-01T00:00:00Z", vec![], vec![], vec![]);
-        // B has one expired annotation that wasn't in A.expired
+        // B has one detonated fuse that wasn't in A.detonated
         let ann = make_report_ann("src/foo.rs", 10, "TODO", "2025-01-15");
         let b = make_report("2025-02-01T00:00:00Z", vec![ann.clone()], vec![], vec![]);
 
         let trend = compute_trend(&a, &b);
-        assert_eq!(trend.newly_expired.len(), 1);
-        assert_eq!(trend.newly_expired[0].file, "src/foo.rs");
-        assert_eq!(trend.expired_delta, 1);
+        assert_eq!(trend.newly_detonated.len(), 1);
+        assert_eq!(trend.newly_detonated[0].file, "src/foo.rs");
+        assert_eq!(trend.detonated_delta, 1);
     }
 
     #[test]
     fn test_compute_trend_resolved() {
-        // Annotation was expired in A, gone in B.
+        // Fuse was detonated in A, gone in B.
         let ann = make_report_ann("src/old.rs", 5, "FIXME", "2020-12-01");
         let a = make_report("2025-01-01T00:00:00Z", vec![ann.clone()], vec![], vec![]);
         let b = make_report("2025-02-01T00:00:00Z", vec![], vec![], vec![]);
@@ -312,19 +308,19 @@ mod tests {
         let trend = compute_trend(&a, &b);
         assert_eq!(trend.resolved.len(), 1);
         assert_eq!(trend.resolved[0].file, "src/old.rs");
-        assert_eq!(trend.expired_delta, -1);
+        assert_eq!(trend.detonated_delta, -1);
     }
 
     #[test]
     fn test_compute_trend_snoozed() {
-        // Annotation was in A.expired, now it's in B.expiring_soon (date bumped).
+        // Fuse was in A.detonated, now it's in B.ticking (date bumped).
         let ann = make_report_ann("src/worker.rs", 88, "TODO", "2025-03-01");
         let a = make_report("2025-01-01T00:00:00Z", vec![ann.clone()], vec![], vec![]);
 
-        // Same file:line, now in expiring_soon bucket.
+        // Same file:line, now in ticking bucket.
         let mut snoozed_ann = ann.clone();
         snoozed_ann.date = "2026-06-01".to_string();
-        snoozed_ann.status = "expiring_soon".to_string();
+        snoozed_ann.status = "ticking".to_string();
         let b = make_report("2025-02-01T00:00:00Z", vec![], vec![snoozed_ann], vec![]);
 
         let trend = compute_trend(&a, &b);
@@ -338,24 +334,24 @@ mod tests {
         let ann2 = make_report_ann("src/b.rs", 2, "FIXME", "2020-06-01");
         let ann3 = make_report_ann("src/c.rs", 3, "HACK", "2021-01-01");
 
-        let mut soon_ann = ann1.clone();
-        soon_ann.status = "expiring_soon".to_string();
+        let mut ticking_ann = ann1.clone();
+        ticking_ann.status = "ticking".to_string();
 
         let a = make_report(
             "2025-01-01T00:00:00Z",
             vec![ann1.clone(), ann2.clone()],
-            vec![soon_ann.clone()],
+            vec![ticking_ann.clone()],
             vec![],
         );
 
-        // B has only 1 expired and 0 expiring soon
+        // B has only 1 detonated and 0 ticking
         let b = make_report("2025-02-01T00:00:00Z", vec![ann3.clone()], vec![], vec![]);
 
         let trend = compute_trend(&a, &b);
-        // expired: was 2, now 1 → delta = -1
-        assert_eq!(trend.expired_delta, -1);
-        // expiring_soon: was 1, now 0 → delta = -1
-        assert_eq!(trend.expiring_soon_delta, -1);
+        // detonated: was 2, now 1 → delta = -1
+        assert_eq!(trend.detonated_delta, -1);
+        // ticking: was 1, now 0 → delta = -1
+        assert_eq!(trend.ticking_delta, -1);
         // total: was 3 (2+1+0), now 1 → delta = -2
         assert_eq!(trend.total_delta, -2);
     }
@@ -375,8 +371,8 @@ mod tests {
         let a = make_report("2025-01-01T00:00:00Z", vec![ann.clone()], vec![], vec![]);
         let b = make_report("2025-02-01T00:00:00Z", vec![ann.clone()], vec![], vec![]);
         let trend = compute_trend(&a, &b);
-        assert_eq!(trend.expired_delta, 0);
-        assert!(trend.newly_expired.is_empty());
+        assert_eq!(trend.detonated_delta, 0);
+        assert!(trend.newly_detonated.is_empty());
         assert!(trend.resolved.is_empty());
         assert!(trend.snoozed.is_empty());
     }
@@ -387,10 +383,10 @@ mod tests {
         TrendResult {
             from_timestamp: "2025-01-01T00:00:00Z".to_string(),
             to_timestamp: "2025-02-01T00:00:00Z".to_string(),
-            expired_delta: 2,
-            expiring_soon_delta: -1,
+            detonated_delta: 2,
+            ticking_delta: -1,
             total_delta: 1,
-            newly_expired: vec![make_report_ann("src/foo.rs", 42, "TODO", "2026-01-15")],
+            newly_detonated: vec![make_report_ann("src/foo.rs", 42, "TODO", "2026-01-15")],
             resolved: vec![make_report_ann("src/old.rs", 5, "TODO", "2025-12-01")],
             snoozed: vec![],
         }
@@ -418,7 +414,7 @@ mod tests {
 
     #[test]
     fn test_run_trend_reads_json_files() {
-        use crate::annotation::{Annotation, Status};
+        use crate::annotation::{Fuse, Status};
         use crate::report::{build_report, write_report};
         use crate::scanner::ScanResult;
         use chrono::NaiveDate;
@@ -426,7 +422,7 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
 
-        let make_ann = |file: &str, line: usize, date_str: &str, status: Status| Annotation {
+        let make_fuse = |file: &str, line: usize, date_str: &str, status: Status| Fuse {
             file: PathBuf::from(file),
             line,
             tag: "TODO".to_string(),
@@ -438,8 +434,8 @@ mod tests {
         };
 
         let result_a = ScanResult {
-            annotations: vec![make_ann("src/a.rs", 1, "2020-01-01", Status::Expired)],
-            scanned_files: 1,
+            fuses: vec![make_fuse("src/a.rs", 1, "2020-01-01", Status::Detonated)],
+            swept_files: 1,
             skipped_files: 0,
         };
         let report_a = build_report(&result_a, "2025-01-01T00:00:00Z");
@@ -447,8 +443,8 @@ mod tests {
         write_report(&report_a, &path_a).unwrap();
 
         let result_b = ScanResult {
-            annotations: vec![make_ann("src/b.rs", 2, "2021-06-01", Status::Expired)],
-            scanned_files: 1,
+            fuses: vec![make_fuse("src/b.rs", 2, "2021-06-01", Status::Detonated)],
+            swept_files: 1,
             skipped_files: 0,
         };
         let report_b = build_report(&result_b, "2025-02-01T00:00:00Z");
@@ -476,20 +472,20 @@ mod tests {
         assert_eq!(annotation_key(&ann), "src/lib.rs:42");
     }
 
-    // ── same annotation stays in neither newly_expired nor resolved ───────────
+    // ── same fuse stays in neither newly_detonated nor resolved ──────────────
 
     #[test]
-    fn test_compute_trend_unchanged_expired_is_neither_new_nor_resolved() {
-        // Same file:line is expired in both A and B → no change.
+    fn test_compute_trend_unchanged_detonated_is_neither_new_nor_resolved() {
+        // Same file:line is detonated in both A and B → no change.
         let ann = make_report_ann("src/x.rs", 10, "TODO", "2020-01-01");
         let a = make_report("2025-01-01T00:00:00Z", vec![ann.clone()], vec![], vec![]);
         let b = make_report("2025-02-01T00:00:00Z", vec![ann.clone()], vec![], vec![]);
 
         let trend = compute_trend(&a, &b);
-        assert!(trend.newly_expired.is_empty(), "not newly expired");
+        assert!(trend.newly_detonated.is_empty(), "not newly detonated");
         assert!(trend.resolved.is_empty(), "not resolved");
         assert!(trend.snoozed.is_empty(), "not snoozed");
-        assert_eq!(trend.expired_delta, 0);
+        assert_eq!(trend.detonated_delta, 0);
     }
 
     // ── multiple snoozed ─────────────────────────────────────────────────────
@@ -507,10 +503,10 @@ mod tests {
 
         let mut snoozed1 = ann1.clone();
         snoozed1.date = "2026-12-01".to_string();
-        snoozed1.status = "expiring_soon".to_string();
+        snoozed1.status = "ticking".to_string();
         let mut snoozed2 = ann2.clone();
         snoozed2.date = "2027-06-01".to_string();
-        snoozed2.status = "expiring_soon".to_string();
+        snoozed2.status = "ticking".to_string();
 
         let b = make_report(
             "2025-02-01T00:00:00Z",
@@ -521,24 +517,24 @@ mod tests {
 
         let trend = compute_trend(&a, &b);
         assert_eq!(trend.snoozed.len(), 2);
-        assert_eq!(trend.expired_delta, -2);
+        assert_eq!(trend.detonated_delta, -2);
     }
 
-    // ── resolved vs ok (annotation moved to ok, not just expiring_soon) ──────
+    // ── resolved vs inert (fuse moved to inert, not just ticking) ────────────
 
     #[test]
-    fn test_compute_trend_moved_to_ok_is_resolved() {
-        // Annotation was expired in A; now it's in B.ok (date bumped far out).
+    fn test_compute_trend_moved_to_inert_is_resolved() {
+        // Fuse was detonated in A; now it's in B.inert (date bumped far out).
         let ann = make_report_ann("src/z.rs", 99, "HACK", "2020-05-01");
         let a = make_report("2025-01-01T00:00:00Z", vec![ann.clone()], vec![], vec![]);
 
-        let mut ok_ann = ann.clone();
-        ok_ann.date = "2099-01-01".to_string();
-        ok_ann.status = "ok".to_string();
-        let b = make_report("2025-02-01T00:00:00Z", vec![], vec![], vec![ok_ann]);
+        let mut inert_ann = ann.clone();
+        inert_ann.date = "2099-01-01".to_string();
+        inert_ann.status = "inert".to_string();
+        let b = make_report("2025-02-01T00:00:00Z", vec![], vec![], vec![inert_ann]);
 
         let trend = compute_trend(&a, &b);
-        // Still present in B (as ok) → not resolved, not snoozed.
+        // Still present in B (as inert) → not resolved, not snoozed.
         assert!(trend.resolved.is_empty());
         assert!(trend.snoozed.is_empty());
     }
@@ -550,10 +546,10 @@ mod tests {
         let a = make_report("2025-01-01T00:00:00Z", vec![], vec![], vec![]);
         let b = make_report("2025-02-01T00:00:00Z", vec![], vec![], vec![]);
         let trend = compute_trend(&a, &b);
-        assert_eq!(trend.expired_delta, 0);
-        assert_eq!(trend.expiring_soon_delta, 0);
+        assert_eq!(trend.detonated_delta, 0);
+        assert_eq!(trend.ticking_delta, 0);
         assert_eq!(trend.total_delta, 0);
-        assert!(trend.newly_expired.is_empty());
+        assert!(trend.newly_detonated.is_empty());
         assert!(trend.resolved.is_empty());
         assert!(trend.snoozed.is_empty());
     }

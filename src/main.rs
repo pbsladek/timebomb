@@ -19,7 +19,7 @@ use chrono::Local;
 use clap::Parser;
 use std::path::{Path, PathBuf};
 use std::process;
-use timebomb::cli::{BaselineCommand, Cli, Command, HookCommand};
+use timebomb::cli::{BaselineCommand, Cli, Command, TripwireCommand};
 
 fn main() {
     let cli = Cli::parse();
@@ -39,9 +39,9 @@ fn main() {
 
 fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
     match cli.command {
-        Command::Check(args) => {
+        Command::Sweep(args) => {
             let scan_path = canonicalize_path(Path::new(&args.path))?;
-            let overrides = CliOverrides::new(args.warn_within.clone(), args.fail_on_warn);
+            let overrides = CliOverrides::new(args.fuse.clone(), args.fail_on_ticking);
             let mut cfg = resolve_config(args.config.as_deref(), &scan_path, &overrides)?;
 
             // --since: restrict scan to files changed relative to the given git ref.
@@ -64,32 +64,32 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             let mut result = scan(&scan_path, &cfg, today)?;
 
             if args.blame {
-                enrich_with_blame(&mut result.annotations, &scan_path);
+                enrich_with_blame(&mut result.fuses, &scan_path);
             }
 
-            // --changed: retain only annotations that fall on lines modified in the git diff.
+            // --changed: retain only fuses that fall on lines modified in the git diff.
             if args.changed {
                 let base = args.base.as_deref().unwrap_or("HEAD");
                 let line_ranges = diff::git_changed_line_ranges(&scan_path, base)?;
-                result.annotations.retain(|ann| {
+                result.fuses.retain(|fuse| {
                     line_ranges
-                        .get(&ann.file)
-                        .map(|ranges| ranges.iter().any(|r| r.contains(&ann.line)))
+                        .get(&fuse.file)
+                        .map(|ranges| ranges.iter().any(|r| r.contains(&fuse.line)))
                         .unwrap_or(false)
                 });
             }
 
-            print_scan_result(&result, &format, cfg.warn_within_days);
+            print_scan_result(&result, &format, cfg.fuse_days);
 
             // Ratchet check: compare counts against saved baseline and/or config limits.
             let baseline_path = scan_path.join(".timebomb-baseline.json");
             let loaded_baseline = baseline::load_baseline(&baseline_path)?;
             let violations = baseline::check_ratchet(
-                result.expired().len(),
-                result.expiring_soon().len(),
+                result.detonated().len(),
+                result.ticking().len(),
                 loaded_baseline.as_ref(),
-                cfg.max_expired,
-                cfg.max_expiring_soon,
+                cfg.max_detonated,
+                cfg.max_ticking,
             );
             if !violations.is_empty() {
                 for v in &violations {
@@ -98,18 +98,18 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 return Ok(1);
             }
 
-            if result.has_expired() {
+            if result.has_detonated() {
                 return Ok(1);
             }
-            if cfg.fail_on_warn && result.has_expiring_soon() {
+            if cfg.fail_on_ticking && result.is_ticking() {
                 return Ok(1);
             }
             Ok(0)
         }
 
-        Command::List(args) => {
+        Command::Manifest(args) => {
             let scan_path = canonicalize_path(Path::new(&args.path))?;
-            let overrides = CliOverrides::new(args.warn_within.clone(), false);
+            let overrides = CliOverrides::new(args.fuse.clone(), false);
             let cfg = resolve_config(args.config.as_deref(), &scan_path, &overrides)?;
 
             let format = match args.format {
@@ -120,15 +120,15 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             let mut result = scan(&scan_path, &cfg, today)?;
 
             if args.blame {
-                enrich_with_blame(&mut result.annotations, &scan_path);
+                enrich_with_blame(&mut result.fuses, &scan_path);
             }
 
-            let annotations: Vec<&annotation::Annotation> = if args.expired {
-                result.expired()
-            } else if let Some(ref soon_str) = args.expiring_soon {
+            let fuses: Vec<&annotation::Fuse> = if args.detonated {
+                result.detonated()
+            } else if let Some(ref soon_str) = args.ticking {
                 let days = parse_duration_days(soon_str)?;
                 result
-                    .annotations
+                    .fuses
                     .iter()
                     .filter(|a| {
                         let days_remaining = a.days_from_today(today);
@@ -136,14 +136,14 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                     })
                     .collect()
             } else {
-                result.annotations.iter().collect()
+                result.fuses.iter().collect()
             };
 
-            print_list(&annotations, &format, cfg.warn_within_days, &scan_path);
+            print_list(&fuses, &format, cfg.fuse_days, &scan_path);
             Ok(0)
         }
 
-        Command::Add(args) => run_add(
+        Command::Plant(args) => run_add(
             &args.target,
             &args.tag,
             args.owner.as_deref(),
@@ -155,7 +155,7 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             args.search.as_deref(),
         ),
 
-        Command::Snooze(args) => run_snooze(
+        Command::Delay(args) => run_snooze(
             &args.target,
             args.date.as_deref(),
             args.in_days,
@@ -165,8 +165,8 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             args.search.as_deref(),
         ),
 
-        Command::Remove(args) => {
-            if args.all_expired {
+        Command::Disarm(args) => {
+            if args.all_detonated {
                 let scan_path = canonicalize_path(Path::new(&args.path))?;
                 let overrides = CliOverrides::default();
                 let cfg = resolve_config(args.config.as_deref(), &scan_path, &overrides)?;
@@ -175,14 +175,14 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 run_remove(target, args.search.as_deref(), args.yes)
             } else {
                 Err(Error::InvalidArgument(
-                    "either a target FILE[:LINE] or --all-expired is required".to_string(),
+                    "either a target FILE[:LINE] or --all-detonated is required".to_string(),
                 ))
             }
         }
 
-        Command::Stats(args) => {
+        Command::Intel(args) => {
             let scan_path = canonicalize_path(Path::new(&args.path))?;
-            let overrides = CliOverrides::new(args.warn_within.clone(), false);
+            let overrides = CliOverrides::new(args.fuse.clone(), false);
             let cfg = resolve_config(args.config.as_deref(), &scan_path, &overrides)?;
 
             let format = match args.format {
@@ -191,23 +191,23 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             };
 
             let result = scan(&scan_path, &cfg, today)?;
-            let stats = compute_stats(&result.annotations);
+            let stats = compute_stats(&result.fuses);
             print_stats(&stats, &format);
             Ok(0)
         }
 
-        Command::Hook(args) => match args.command {
-            HookCommand::Install(a) => {
+        Command::Tripwire(args) => match args.command {
+            TripwireCommand::Set(a) => {
                 let path = canonicalize_path(Path::new(&a.path))?;
                 hook::run_hook_install(&path, a.yes)
             }
-            HookCommand::Uninstall(a) => {
+            TripwireCommand::Cut(a) => {
                 let path = canonicalize_path(Path::new(&a.path))?;
                 hook::run_hook_uninstall(&path, a.yes)
             }
         },
 
-        Command::Trend(args) => {
+        Command::Fallout(args) => {
             let format = match args.format {
                 Some(ref f) => f.to_output_format(),
                 None => OutputFormat::auto_detect(),
@@ -219,9 +219,9 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             )
         }
 
-        Command::Fix(args) => {
+        Command::Defuse(args) => {
             let scan_path = canonicalize_path(Path::new(&args.path))?;
-            let overrides = CliOverrides::new(args.warn_within.clone(), false);
+            let overrides = CliOverrides::new(args.fuse.clone(), false);
             let cfg = resolve_config(args.config.as_deref(), &scan_path, &overrides)?;
             let summary = fix::run_fix(&scan_path, &cfg, today)?;
             println!(
@@ -231,10 +231,10 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             Ok(0)
         }
 
-        Command::Baseline(args) => match args.command {
+        Command::Bunker(args) => match args.command {
             BaselineCommand::Save(a) => {
                 let scan_path = canonicalize_path(Path::new(&a.path))?;
-                let overrides = CliOverrides::new(a.warn_within.clone(), false);
+                let overrides = CliOverrides::new(a.fuse.clone(), false);
                 let cfg = resolve_config(a.config.as_deref(), &scan_path, &overrides)?;
                 let baseline_path = Path::new(&a.baseline_file);
                 // Use the full RFC 3339 timestamp from the local clock, not just the date.
@@ -243,7 +243,7 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             }
             BaselineCommand::Show(a) => {
                 let scan_path = canonicalize_path(Path::new(&a.path))?;
-                let overrides = CliOverrides::new(a.warn_within.clone(), false);
+                let overrides = CliOverrides::new(a.fuse.clone(), false);
                 let cfg = resolve_config(a.config.as_deref(), &scan_path, &overrides)?;
                 let baseline_path = Path::new(&a.baseline_file);
                 baseline::run_baseline_show(&scan_path, &cfg, today, baseline_path)
@@ -318,26 +318,24 @@ fn merge_file_config(
     use config::Config;
     let defaults = Config::default();
 
-    let tags = file_cfg.tags.unwrap_or(defaults.tags);
-    let mut warn_within_days = file_cfg
-        .warn_within_days
-        .unwrap_or(defaults.warn_within_days);
+    let triggers = file_cfg.triggers.unwrap_or(defaults.triggers);
+    let mut fuse_days = file_cfg.fuse_days.unwrap_or(defaults.fuse_days);
     let exclude_patterns = file_cfg.exclude.unwrap_or(defaults.exclude_patterns);
     let extensions = file_cfg.extensions.unwrap_or(defaults.extensions);
 
-    if let Some(ref w) = overrides.warn_within {
-        warn_within_days = parse_duration_days(w)?;
+    if let Some(ref w) = overrides.fuse {
+        fuse_days = parse_duration_days(w)?;
     }
 
     Ok(Config {
-        tags,
-        warn_within_days,
+        triggers,
+        fuse_days,
         exclude_patterns,
         extensions,
-        fail_on_warn: overrides.fail_on_warn,
+        fail_on_ticking: overrides.fail_on_ticking,
         diff_files: None,
-        max_expired: file_cfg.max_expired,
-        max_expiring_soon: file_cfg.max_expiring_soon,
+        max_detonated: file_cfg.max_detonated,
+        max_ticking: file_cfg.max_ticking,
     })
 }
 
@@ -352,110 +350,110 @@ mod tests {
         NaiveDate::parse_from_str("2025-06-01", "%Y-%m-%d").unwrap()
     }
 
-    // ── check subcommand ──────────────────────────────────────────────────────
+    // ── sweep subcommand ──────────────────────────────────────────────────────
 
     #[test]
-    fn test_check_no_expired_exits_zero() {
+    fn test_sweep_no_detonated_exits_zero() {
         let dir = tempfile::tempdir().unwrap();
         let mut f = std::fs::File::create(dir.path().join("ok.rs")).unwrap();
         writeln!(f, "// TODO[2099-01-01]: fine").unwrap();
 
-        let cli = Cli::parse_from(["timebomb", "check", dir.path().to_str().unwrap()]);
+        let cli = Cli::parse_from(["timebomb", "sweep", dir.path().to_str().unwrap()]);
         let code = run(cli, fixed_today()).unwrap();
         assert_eq!(code, 0);
     }
 
     #[test]
-    fn test_check_expired_exits_one() {
+    fn test_sweep_detonated_exits_one() {
         let dir = tempfile::tempdir().unwrap();
         let mut f = std::fs::File::create(dir.path().join("old.rs")).unwrap();
-        writeln!(f, "// TODO[2020-01-01]: expired").unwrap();
+        writeln!(f, "// TODO[2020-01-01]: detonated").unwrap();
 
-        let cli = Cli::parse_from(["timebomb", "check", dir.path().to_str().unwrap()]);
+        let cli = Cli::parse_from(["timebomb", "sweep", dir.path().to_str().unwrap()]);
         let code = run(cli, fixed_today()).unwrap();
         assert_eq!(code, 1);
     }
 
     #[test]
-    fn test_check_warn_only_no_fail_on_warn_exits_zero() {
+    fn test_sweep_ticking_only_no_fail_on_ticking_exits_zero() {
         let dir = tempfile::tempdir().unwrap();
         let mut f = std::fs::File::create(dir.path().join("soon.rs")).unwrap();
         // 8 days from our fixed today
-        writeln!(f, "// TODO[2025-06-09]: expiring soon").unwrap();
+        writeln!(f, "// TODO[2025-06-09]: ticking").unwrap();
 
         let cli = Cli::parse_from([
             "timebomb",
-            "check",
+            "sweep",
             dir.path().to_str().unwrap(),
-            "--warn-within",
+            "--fuse",
             "14d",
         ]);
         let code = run(cli, fixed_today()).unwrap();
-        // Warnings alone without --fail-on-warn should exit 0
+        // Ticking alone without --fail-on-ticking should exit 0
         assert_eq!(code, 0);
     }
 
     #[test]
-    fn test_check_fail_on_warn_exits_one() {
+    fn test_sweep_fail_on_ticking_exits_one() {
         let dir = tempfile::tempdir().unwrap();
         let mut f = std::fs::File::create(dir.path().join("soon.rs")).unwrap();
-        writeln!(f, "// TODO[2025-06-09]: expiring soon").unwrap();
+        writeln!(f, "// TODO[2025-06-09]: ticking").unwrap();
 
         let cli = Cli::parse_from([
             "timebomb",
-            "check",
+            "sweep",
             dir.path().to_str().unwrap(),
-            "--warn-within",
+            "--fuse",
             "14d",
-            "--fail-on-warn",
+            "--fail-on-ticking",
         ]);
         let code = run(cli, fixed_today()).unwrap();
         assert_eq!(code, 1);
     }
 
     #[test]
-    fn test_check_json_format() {
+    fn test_sweep_json_format() {
         let dir = tempfile::tempdir().unwrap();
         let mut f = std::fs::File::create(dir.path().join("lib.rs")).unwrap();
         writeln!(f, "// FIXME[2020-01-01]: old").unwrap();
 
         let cli = Cli::parse_from([
             "timebomb",
-            "check",
+            "sweep",
             dir.path().to_str().unwrap(),
             "--format",
             "json",
         ]);
-        // Should not error; exit code 1 because expired
+        // Should not error; exit code 1 because detonated
         let code = run(cli, fixed_today()).unwrap();
         assert_eq!(code, 1);
     }
 
     #[test]
-    fn test_check_empty_dir_exits_zero() {
+    fn test_sweep_empty_dir_exits_zero() {
         let dir = tempfile::tempdir().unwrap();
-        let cli = Cli::parse_from(["timebomb", "check", dir.path().to_str().unwrap()]);
+        let cli = Cli::parse_from(["timebomb", "sweep", dir.path().to_str().unwrap()]);
         let code = run(cli, fixed_today()).unwrap();
         assert_eq!(code, 0);
     }
 
     #[test]
-    fn test_check_nonexistent_path_is_error() {
-        let cli = Cli::parse_from(["timebomb", "check", "/nonexistent/path/xyz"]);
+    fn test_sweep_nonexistent_path_is_error() {
+        let cli = Cli::parse_from(["timebomb", "sweep", "/nonexistent/path/xyz"]);
         let result = run(cli, fixed_today());
         assert!(result.is_err());
     }
 
     #[test]
-    fn test_check_with_explicit_config() {
+    fn test_sweep_with_explicit_config() {
         use std::io::Write as _;
         let dir = tempfile::tempdir().unwrap();
 
-        // Write config that sets warn_within_days = 30
+        // Write config that sets fuse_days = 30
         let cfg_path = dir.path().join("my.toml");
         {
             let mut f = std::fs::File::create(&cfg_path).unwrap();
-            writeln!(f, "warn_within_days = 30").unwrap();
+            writeln!(f, "fuse_days = 30").unwrap();
         }
 
         let src_path = dir.path().join("main.rs");
@@ -466,7 +464,7 @@ mod tests {
 
         let cli = Cli::parse_from([
             "timebomb",
-            "check",
+            "sweep",
             dir.path().to_str().unwrap(),
             "--config",
             cfg_path.to_str().unwrap(),
@@ -475,49 +473,49 @@ mod tests {
         assert_eq!(code, 0);
     }
 
-    // ── list subcommand ───────────────────────────────────────────────────────
+    // ── manifest subcommand ───────────────────────────────────────────────────
 
     #[test]
-    fn test_list_exits_zero_even_with_expired() {
+    fn test_manifest_exits_zero_even_with_detonated() {
         let dir = tempfile::tempdir().unwrap();
         let mut f = std::fs::File::create(dir.path().join("old.rs")).unwrap();
-        writeln!(f, "// TODO[2020-01-01]: expired").unwrap();
+        writeln!(f, "// TODO[2020-01-01]: detonated").unwrap();
 
-        let cli = Cli::parse_from(["timebomb", "list", dir.path().to_str().unwrap()]);
+        let cli = Cli::parse_from(["timebomb", "manifest", dir.path().to_str().unwrap()]);
         let code = run(cli, fixed_today()).unwrap();
-        // list always exits 0
+        // manifest always exits 0
         assert_eq!(code, 0);
     }
 
     #[test]
-    fn test_list_expired_filter() {
+    fn test_manifest_detonated_filter() {
         let dir = tempfile::tempdir().unwrap();
         let mut f = std::fs::File::create(dir.path().join("mixed.rs")).unwrap();
-        writeln!(f, "// TODO[2020-01-01]: expired").unwrap();
+        writeln!(f, "// TODO[2020-01-01]: detonated").unwrap();
         writeln!(f, "// FIXME[2099-01-01]: future").unwrap();
 
         let cli = Cli::parse_from([
             "timebomb",
-            "list",
+            "manifest",
             dir.path().to_str().unwrap(),
-            "--expired",
+            "--detonated",
         ]);
         let code = run(cli, fixed_today()).unwrap();
         assert_eq!(code, 0);
     }
 
     #[test]
-    fn test_list_expiring_soon_filter() {
+    fn test_manifest_ticking_filter() {
         let dir = tempfile::tempdir().unwrap();
         let mut f = std::fs::File::create(dir.path().join("mixed.rs")).unwrap();
-        writeln!(f, "// TODO[2025-06-08]: expiring in 7 days").unwrap();
+        writeln!(f, "// TODO[2025-06-08]: ticking in 7 days").unwrap();
         writeln!(f, "// FIXME[2099-01-01]: far future").unwrap();
 
         let cli = Cli::parse_from([
             "timebomb",
-            "list",
+            "manifest",
             dir.path().to_str().unwrap(),
-            "--expiring-soon",
+            "--ticking",
             "14d",
         ]);
         let code = run(cli, fixed_today()).unwrap();
@@ -525,14 +523,14 @@ mod tests {
     }
 
     #[test]
-    fn test_list_json_format() {
+    fn test_manifest_json_format() {
         let dir = tempfile::tempdir().unwrap();
         let mut f = std::fs::File::create(dir.path().join("a.rs")).unwrap();
-        writeln!(f, "// TODO[2020-01-01]: expired").unwrap();
+        writeln!(f, "// TODO[2020-01-01]: detonated").unwrap();
 
         let cli = Cli::parse_from([
             "timebomb",
-            "list",
+            "manifest",
             dir.path().to_str().unwrap(),
             "--format",
             "json",
@@ -561,33 +559,33 @@ mod tests {
     #[test]
     fn test_merge_file_config_basic() {
         let file_cfg = config::ConfigFile {
-            tags: Some(vec!["TODO".to_string()]),
-            warn_within_days: Some(7),
+            triggers: Some(vec!["TODO".to_string()]),
+            fuse_days: Some(7),
             exclude: None,
             extensions: None,
-            max_expired: None,
-            max_expiring_soon: None,
+            max_detonated: None,
+            max_ticking: None,
         };
         let overrides = CliOverrides::default();
         let cfg = merge_file_config(file_cfg, &overrides).unwrap();
-        assert_eq!(cfg.tags, vec!["TODO"]);
-        assert_eq!(cfg.warn_within_days, 7);
+        assert_eq!(cfg.triggers, vec!["TODO"]);
+        assert_eq!(cfg.fuse_days, 7);
     }
 
     #[test]
-    fn test_merge_file_config_cli_overrides_warn() {
+    fn test_merge_file_config_cli_overrides_fuse() {
         let file_cfg = config::ConfigFile {
-            tags: None,
-            warn_within_days: Some(7),
+            triggers: None,
+            fuse_days: Some(7),
             exclude: None,
             extensions: None,
-            max_expired: None,
-            max_expiring_soon: None,
+            max_detonated: None,
+            max_ticking: None,
         };
         let overrides = CliOverrides::new(Some("30d".to_string()), false);
         let cfg = merge_file_config(file_cfg, &overrides).unwrap();
         // CLI should win
-        assert_eq!(cfg.warn_within_days, 30);
+        assert_eq!(cfg.fuse_days, 30);
     }
 
     // ── resolve_config ────────────────────────────────────────────────────────
@@ -599,7 +597,7 @@ mod tests {
         let cfg = resolve_config(None, dir.path(), &overrides).unwrap();
         // No config file in temp dir and no CWD match (temp dir != cwd)
         // Should get defaults
-        assert!(cfg.tags.contains(&"TODO".to_string()));
+        assert!(cfg.triggers.contains(&"TODO".to_string()));
     }
 
     #[test]
@@ -608,11 +606,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         {
             let mut f = std::fs::File::create(dir.path().join(".timebomb.toml")).unwrap();
-            writeln!(f, "warn_within_days = 99").unwrap();
+            writeln!(f, "fuse_days = 99").unwrap();
         }
         let overrides = CliOverrides::default();
         let cfg = resolve_config(None, dir.path(), &overrides).unwrap();
-        assert_eq!(cfg.warn_within_days, 99);
+        assert_eq!(cfg.fuse_days, 99);
     }
 
     #[test]
@@ -623,20 +621,20 @@ mod tests {
         // Config in the scan dir
         {
             let mut f = std::fs::File::create(dir.path().join(".timebomb.toml")).unwrap();
-            writeln!(f, "warn_within_days = 7").unwrap();
+            writeln!(f, "fuse_days = 7").unwrap();
         }
 
         // Explicit config file
         let explicit_cfg = dir.path().join("explicit.toml");
         {
             let mut f = std::fs::File::create(&explicit_cfg).unwrap();
-            writeln!(f, "warn_within_days = 99").unwrap();
+            writeln!(f, "fuse_days = 99").unwrap();
         }
 
         let overrides = CliOverrides::default();
         let cfg =
             resolve_config(Some(explicit_cfg.to_str().unwrap()), dir.path(), &overrides).unwrap();
         // Explicit config should win over scan-dir config
-        assert_eq!(cfg.warn_within_days, 99);
+        assert_eq!(cfg.fuse_days, 99);
     }
 }

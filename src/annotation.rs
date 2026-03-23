@@ -2,24 +2,24 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// The status of an annotation relative to a given "today" date.
+/// The status of a fuse relative to a given "today" date.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     /// The deadline has already passed.
-    Expired,
+    Detonated,
     /// The deadline is within the configured warning window.
-    ExpiringSoon,
+    Ticking,
     /// The deadline is comfortably in the future.
-    Ok,
+    Inert,
 }
 
 impl Status {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Status::Expired => "expired",
-            Status::ExpiringSoon => "expiring_soon",
-            Status::Ok => "ok",
+            Status::Detonated => "detonated",
+            Status::Ticking => "ticking",
+            Status::Inert => "inert",
         }
     }
 }
@@ -30,10 +30,10 @@ impl std::fmt::Display for Status {
     }
 }
 
-/// A single timebomb annotation found in a source file.
+/// A single timebomb fuse found in a source file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Annotation {
-    /// Path to the file containing the annotation (relative to scan root).
+pub struct Fuse {
+    /// Path to the file containing the fuse (relative to scan root).
     pub file: PathBuf,
 
     /// 1-based line number within the file.
@@ -42,7 +42,7 @@ pub struct Annotation {
     /// The tag keyword, e.g. "TODO", "FIXME", "HACK".
     pub tag: String,
 
-    /// The expiry date parsed from the annotation.
+    /// The expiry date parsed from the fuse.
     #[serde(serialize_with = "serialize_naive_date")]
     #[serde(deserialize_with = "deserialize_naive_date")]
     pub date: NaiveDate,
@@ -62,33 +62,33 @@ pub struct Annotation {
     pub blamed_owner: Option<String>,
 }
 
-impl Annotation {
+impl Fuse {
     /// Compute the number of days until (or since) expiry relative to `today`.
     /// Positive means days remaining; negative means days overdue.
     pub fn days_from_today(&self, today: NaiveDate) -> i64 {
         (self.date - today).num_days()
     }
 
-    /// Returns true if this annotation has already expired.
-    pub fn is_expired(&self) -> bool {
-        self.status == Status::Expired
+    /// Returns true if this fuse has already detonated.
+    pub fn is_detonated(&self) -> bool {
+        self.status == Status::Detonated
     }
 
-    /// Returns true if this annotation is in the expiring-soon window.
-    pub fn is_expiring_soon(&self) -> bool {
-        self.status == Status::ExpiringSoon
+    /// Returns true if this fuse is in the ticking window.
+    pub fn is_ticking(&self) -> bool {
+        self.status == Status::Ticking
     }
 
-    /// Compute the status of an annotation given today's date and the warn_within_days threshold.
-    pub fn compute_status(date: NaiveDate, today: NaiveDate, warn_within_days: u32) -> Status {
+    /// Compute the status of a fuse given today's date and the fuse_days threshold.
+    pub fn compute_status(date: NaiveDate, today: NaiveDate, fuse_days: u32) -> Status {
         if date < today {
-            Status::Expired
+            Status::Detonated
         } else {
             let days_remaining = (date - today).num_days();
-            if days_remaining <= warn_within_days as i64 {
-                Status::ExpiringSoon
+            if days_remaining <= fuse_days as i64 {
+                Status::Ticking
             } else {
-                Status::Ok
+                Status::Inert
             }
         }
     }
@@ -129,8 +129,8 @@ mod tests {
         NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
     }
 
-    fn make_annotation(expiry: &str, status: Status) -> Annotation {
-        Annotation {
+    fn make_fuse(expiry: &str, status: Status) -> Fuse {
+        Fuse {
             file: PathBuf::from("src/foo.rs"),
             line: 10,
             tag: "TODO".to_string(),
@@ -143,118 +143,118 @@ mod tests {
     }
 
     #[test]
-    fn test_status_expired() {
+    fn test_status_detonated() {
         let today = date("2025-06-01");
-        let status = Annotation::compute_status(date("2025-01-01"), today, 14);
-        assert_eq!(status, Status::Expired);
+        let status = Fuse::compute_status(date("2025-01-01"), today, 14);
+        assert_eq!(status, Status::Detonated);
     }
 
     #[test]
-    fn test_status_expiring_soon_boundary() {
+    fn test_status_ticking_boundary() {
         let today = date("2025-06-01");
         // Exactly on the warn boundary — 14 days from now
-        let status = Annotation::compute_status(date("2025-06-15"), today, 14);
-        assert_eq!(status, Status::ExpiringSoon);
+        let status = Fuse::compute_status(date("2025-06-15"), today, 14);
+        assert_eq!(status, Status::Ticking);
     }
 
     #[test]
-    fn test_status_expiring_soon_within_window() {
+    fn test_status_ticking_within_window() {
         let today = date("2025-06-01");
-        let status = Annotation::compute_status(date("2025-06-10"), today, 14);
-        assert_eq!(status, Status::ExpiringSoon);
+        let status = Fuse::compute_status(date("2025-06-10"), today, 14);
+        assert_eq!(status, Status::Ticking);
     }
 
     #[test]
-    fn test_status_ok() {
+    fn test_status_inert() {
         let today = date("2025-06-01");
-        let status = Annotation::compute_status(date("2025-12-31"), today, 14);
-        assert_eq!(status, Status::Ok);
+        let status = Fuse::compute_status(date("2025-12-31"), today, 14);
+        assert_eq!(status, Status::Inert);
     }
 
     #[test]
-    fn test_status_expire_today_is_expired() {
-        // An annotation whose date IS today is considered expired (date < today is false,
-        // but days_remaining == 0 which is <= warn_within_days — so ExpiringSoon).
+    fn test_status_expire_today_is_ticking() {
+        // A fuse whose date IS today is considered ticking (date < today is false,
+        // but days_remaining == 0 which is <= fuse_days — so Ticking).
         // Per spec, "deadline has passed" means strictly before today.
         let today = date("2025-06-01");
-        let status = Annotation::compute_status(date("2025-06-01"), today, 0);
-        // With warn_within=0, days_remaining==0 is <= 0 => ExpiringSoon
-        assert_eq!(status, Status::ExpiringSoon);
+        let status = Fuse::compute_status(date("2025-06-01"), today, 0);
+        // With fuse_days=0, days_remaining==0 is <= 0 => Ticking
+        assert_eq!(status, Status::Ticking);
     }
 
     #[test]
     fn test_days_from_today_positive() {
         let today = date("2025-06-01");
-        let ann = make_annotation("2025-06-11", Status::Ok);
-        assert_eq!(ann.days_from_today(today), 10);
+        let fuse = make_fuse("2025-06-11", Status::Inert);
+        assert_eq!(fuse.days_from_today(today), 10);
     }
 
     #[test]
     fn test_days_from_today_negative() {
         let today = date("2025-06-01");
-        let ann = make_annotation("2025-05-20", Status::Expired);
-        assert_eq!(ann.days_from_today(today), -12);
+        let fuse = make_fuse("2025-05-20", Status::Detonated);
+        assert_eq!(fuse.days_from_today(today), -12);
     }
 
     #[test]
     fn test_location() {
-        let ann = make_annotation("2099-01-01", Status::Ok);
-        assert_eq!(ann.location(), "src/foo.rs:10");
+        let fuse = make_fuse("2099-01-01", Status::Inert);
+        assert_eq!(fuse.location(), "src/foo.rs:10");
     }
 
     #[test]
     fn test_date_str() {
-        let ann = make_annotation("2099-03-15", Status::Ok);
-        assert_eq!(ann.date_str(), "2099-03-15");
+        let fuse = make_fuse("2099-03-15", Status::Inert);
+        assert_eq!(fuse.date_str(), "2099-03-15");
     }
 
     #[test]
-    fn test_is_expired() {
-        let ann = make_annotation("2020-01-01", Status::Expired);
-        assert!(ann.is_expired());
-        assert!(!ann.is_expiring_soon());
+    fn test_is_detonated() {
+        let fuse = make_fuse("2020-01-01", Status::Detonated);
+        assert!(fuse.is_detonated());
+        assert!(!fuse.is_ticking());
     }
 
     #[test]
-    fn test_is_expiring_soon() {
-        let ann = make_annotation("2025-06-10", Status::ExpiringSoon);
-        assert!(ann.is_expiring_soon());
-        assert!(!ann.is_expired());
+    fn test_is_ticking() {
+        let fuse = make_fuse("2025-06-10", Status::Ticking);
+        assert!(fuse.is_ticking());
+        assert!(!fuse.is_detonated());
     }
 
     #[test]
     fn test_status_display() {
-        assert_eq!(Status::Expired.to_string(), "expired");
-        assert_eq!(Status::ExpiringSoon.to_string(), "expiring_soon");
-        assert_eq!(Status::Ok.to_string(), "ok");
+        assert_eq!(Status::Detonated.to_string(), "detonated");
+        assert_eq!(Status::Ticking.to_string(), "ticking");
+        assert_eq!(Status::Inert.to_string(), "inert");
     }
 
     #[test]
     fn test_serde_roundtrip() {
-        let ann = Annotation {
+        let fuse = Fuse {
             file: PathBuf::from("src/lib.rs"),
             line: 99,
             tag: "FIXME".to_string(),
             date: date("2099-12-31"),
             owner: Some("alice".to_string()),
             message: "remove after upgrade".to_string(),
-            status: Status::Ok,
+            status: Status::Inert,
             blamed_owner: None,
         };
-        let json = serde_json::to_string(&ann).unwrap();
+        let json = serde_json::to_string(&fuse).unwrap();
         assert!(json.contains("2099-12-31"));
         assert!(json.contains("alice"));
-        let decoded: Annotation = serde_json::from_str(&json).unwrap();
-        assert_eq!(decoded.date, ann.date);
-        assert_eq!(decoded.owner, ann.owner);
-        assert_eq!(decoded.tag, ann.tag);
+        let decoded: Fuse = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.date, fuse.date);
+        assert_eq!(decoded.owner, fuse.owner);
+        assert_eq!(decoded.tag, fuse.tag);
     }
 
     #[test]
-    fn test_compute_status_zero_warn_window() {
+    fn test_compute_status_zero_fuse_window() {
         let today = date("2025-06-01");
-        // Future date with no warn window → Ok
-        let status = Annotation::compute_status(date("2025-06-02"), today, 0);
-        assert_eq!(status, Status::Ok);
+        // Future date with no fuse window → Inert
+        let status = Fuse::compute_status(date("2025-06-02"), today, 0);
+        assert_eq!(status, Status::Inert);
     }
 }

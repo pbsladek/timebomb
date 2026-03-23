@@ -10,22 +10,22 @@ fn try_parse(args: &[&str]) -> Result<Cli, clap::Error> {
 }
 
 #[test]
-fn test_cli_check_changed_flag() {
-    let cli = parse(&["timebomb", "check", "--changed"]);
+fn test_cli_sweep_changed_flag() {
+    let cli = parse(&["timebomb", "sweep", "--changed"]);
     match cli.command {
-        Command::Check(args) => {
+        Command::Sweep(args) => {
             assert!(args.changed, "--changed should be true");
             assert!(args.base.is_none(), "--base should default to None");
         }
-        _ => panic!("expected Check"),
+        _ => panic!("expected Sweep"),
     }
 }
 
 #[test]
-fn test_cli_check_changed_with_base() {
-    let cli = parse(&["timebomb", "check", "--changed", "--base", "origin/main"]);
+fn test_cli_sweep_changed_with_base() {
+    let cli = parse(&["timebomb", "sweep", "--changed", "--base", "origin/main"]);
     match cli.command {
-        Command::Check(args) => {
+        Command::Sweep(args) => {
             assert!(args.changed, "--changed should be true");
             assert_eq!(
                 args.base,
@@ -33,14 +33,14 @@ fn test_cli_check_changed_with_base() {
                 "--base should be origin/main"
             );
         }
-        _ => panic!("expected Check"),
+        _ => panic!("expected Sweep"),
     }
 }
 
 #[test]
-fn test_cli_check_base_requires_changed() {
+fn test_cli_sweep_base_requires_changed() {
     // --base without --changed should be rejected by clap (requires = "changed")
-    let result = try_parse(&["timebomb", "check", "--base", "origin/main"]);
+    let result = try_parse(&["timebomb", "sweep", "--base", "origin/main"]);
     assert!(
         result.is_err(),
         "--base without --changed should produce a clap error"

@@ -1,15 +1,15 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
-/// timebomb — enforce expiring TODO/FIXME annotations in source code
+/// timebomb — enforce expiring TODO/FIXME fuses in source code
 #[derive(Debug, Parser)]
 #[command(
     name = "timebomb",
     version,
-    about = "Scan source code for expiring TODO/FIXME annotations",
-    long_about = "timebomb scans your source code for structured TODO/FIXME annotations \
+    about = "Sweep source code for ticking fuses and detonate in CI when deadlines pass",
+    long_about = "timebomb sweeps your source code for structured TODO/FIXME fuses \
                   with expiry dates and fails in CI when deadlines have passed.\n\n\
-                  Annotation format:  // TODO[2026-06-01]: message\n\
-                  With owner:         // TODO[2026-06-01][alice]: message"
+                  Fuse format:  // TODO[2026-06-01]: message\n\
+                  With owner:   // TODO[2026-06-01][alice]: message"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -18,51 +18,51 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Scan for annotations and exit non-zero if any have expired
-    Check(CheckArgs),
+    /// Sweep for fuses and exit non-zero if any have detonated
+    Sweep(SweepArgs),
 
-    /// List all annotations sorted by expiry date
-    List(ListArgs),
+    /// List all fuses sorted by expiry date
+    Manifest(ManifestArgs),
 
-    /// Insert a timebomb annotation into a source file
-    Add(AddArgs),
+    /// Insert a timebomb fuse into a source file
+    Plant(PlantArgs),
 
-    /// Bump the expiry date on an existing annotation without editing the file
-    Snooze(SnoozeArgs),
+    /// Bump the expiry date on an existing fuse without editing the file
+    Delay(DelayArgs),
 
-    /// Remove an annotation from a source file
-    Remove(RemoveArgs),
+    /// Remove a fuse from a source file
+    Disarm(DisarmArgs),
 
-    /// Show annotation counts broken down by owner and tag
-    Stats(StatsArgs),
+    /// Show fuse counts broken down by owner and tag
+    Intel(IntelArgs),
 
-    /// Manage the git pre-commit hook
-    Hook(HookArgs),
+    /// Manage the git pre-commit tripwire
+    Tripwire(TripwireArgs),
 
-    /// Compare two report JSON snapshots and show annotation debt trajectory
-    Trend(TrendArgs),
+    /// Compare two report JSON snapshots and show fuse debt trajectory
+    Fallout(FalloutArgs),
 
-    /// Interactively fix expired annotations: extend, delete, or skip each one
-    Fix(FixArgs),
+    /// Interactively defuse detonated fuses: extend, delete, or skip each one
+    Defuse(DefuseArgs),
 
-    /// Save or show the annotation count baseline for ratchet enforcement
-    Baseline(BaselineArgs),
+    /// Save or show the fuse count baseline for ratchet enforcement
+    Bunker(BunkerArgs),
 }
 
-/// Arguments for the `check` subcommand.
+/// Arguments for the `sweep` subcommand.
 #[derive(Debug, clap::Args)]
-pub struct CheckArgs {
+pub struct SweepArgs {
     /// Path to scan (default: current directory)
     #[arg(default_value = ".")]
     pub path: String,
 
-    /// Warn on annotations expiring within this window (e.g. "30d")
+    /// Warn on fuses expiring within this window (e.g. "30d")
     #[arg(long, value_name = "DURATION")]
-    pub warn_within: Option<String>,
+    pub fuse: Option<String>,
 
-    /// Exit with code 1 if any annotations are in the warning window (not just expired)
+    /// Exit with code 1 if any fuses are in the ticking window (not just detonated)
     #[arg(long, default_value_t = false)]
-    pub fail_on_warn: bool,
+    pub fail_on_ticking: bool,
 
     /// Output format
     #[arg(long, value_name = "FORMAT")]
@@ -72,15 +72,15 @@ pub struct CheckArgs {
     #[arg(long, value_name = "FILE")]
     pub config: Option<String>,
 
-    /// Only report annotations touched in the git diff against this ref (e.g. "HEAD", "main")
+    /// Only report fuses touched in the git diff against this ref (e.g. "HEAD", "main")
     #[arg(long, value_name = "REF")]
     pub since: Option<String>,
 
-    /// Enrich annotations without an explicit owner with git blame author
+    /// Enrich fuses without an explicit owner with git blame author
     #[arg(long)]
     pub blame: bool,
 
-    /// Only report annotations on lines changed in the git diff
+    /// Only report fuses on lines changed in the git diff
     #[arg(long, default_value_t = false)]
     pub changed: bool,
 
@@ -89,46 +89,46 @@ pub struct CheckArgs {
     pub base: Option<String>,
 }
 
-/// Arguments for the `list` subcommand.
+/// Arguments for the `manifest` subcommand.
 #[derive(Debug, clap::Args)]
-pub struct ListArgs {
+pub struct ManifestArgs {
     /// Path to scan (default: current directory)
     #[arg(default_value = ".")]
     pub path: String,
 
-    /// Only show expired annotations
+    /// Only show detonated fuses
     #[arg(long, default_value_t = false)]
-    pub expired: bool,
+    pub detonated: bool,
 
-    /// Only show annotations expiring within this window (e.g. "14d")
-    #[arg(long, value_name = "DURATION", conflicts_with = "expired")]
-    pub expiring_soon: Option<String>,
+    /// Only show fuses ticking within this window (e.g. "14d")
+    #[arg(long, value_name = "DURATION", conflicts_with = "detonated")]
+    pub ticking: Option<String>,
 
     /// Output format
     #[arg(long, value_name = "FORMAT")]
     pub format: Option<FormatArg>,
 
-    /// Warn-within threshold used for status classification (e.g. "14d")
+    /// Fuse-days threshold used for status classification (e.g. "14d")
     #[arg(long, value_name = "DURATION")]
-    pub warn_within: Option<String>,
+    pub fuse: Option<String>,
 
     /// Path to config file (default: .timebomb.toml in scan root or cwd)
     #[arg(long, value_name = "FILE")]
     pub config: Option<String>,
 
-    /// Enrich annotations without an explicit owner with git blame author
+    /// Enrich fuses without an explicit owner with git blame author
     #[arg(long)]
     pub blame: bool,
 }
 
-/// Arguments for the `add` subcommand.
+/// Arguments for the `plant` subcommand.
 #[derive(Debug, clap::Args)]
-pub struct AddArgs {
+pub struct PlantArgs {
     /// File and line to annotate, e.g. "src/main.rs:42"
     #[arg(value_name = "FILE[:LINE]")]
     pub target: String,
 
-    /// Annotation message (what needs to be done / why)
+    /// Fuse message (what needs to be done / why)
     #[arg(value_name = "MESSAGE")]
     pub message: String,
 
@@ -140,7 +140,7 @@ pub struct AddArgs {
     #[arg(long, default_value = "TODO", value_name = "TAG")]
     pub tag: String,
 
-    /// Owner of the annotation, e.g. "alice" or "team-backend"
+    /// Owner of the fuse, e.g. "alice" or "team-backend"
     #[arg(long, value_name = "OWNER")]
     pub owner: Option<String>,
 
@@ -157,9 +157,9 @@ pub struct AddArgs {
     pub yes: bool,
 }
 
-/// Arguments for the `snooze` subcommand.
+/// Arguments for the `delay` subcommand.
 #[derive(Debug, clap::Args)]
-pub struct SnoozeArgs {
+pub struct DelayArgs {
     /// Target file and line, e.g. "src/main.rs:42"
     #[arg(value_name = "FILE[:LINE]")]
     pub target: String,
@@ -172,7 +172,7 @@ pub struct SnoozeArgs {
     #[arg(long, value_name = "DAYS", conflicts_with = "date")]
     pub in_days: Option<u32>,
 
-    /// Reason for snoozing (appended to the annotation message)
+    /// Reason for delaying (appended to the fuse message)
     #[arg(long, value_name = "TEXT")]
     pub reason: Option<String>,
 
@@ -185,27 +185,27 @@ pub struct SnoozeArgs {
     pub yes: bool,
 }
 
-/// Arguments for the `remove` subcommand.
+/// Arguments for the `disarm` subcommand.
 #[derive(Debug, clap::Args)]
-pub struct RemoveArgs {
+pub struct DisarmArgs {
     /// File and line to remove, e.g. "src/main.rs:42"
-    /// Omit when using --all-expired
+    /// Omit when using --all-detonated
     #[arg(value_name = "FILE[:LINE]")]
     pub target: Option<String>,
 
-    /// Search for a pattern to find the annotation to remove
-    #[arg(long, value_name = "PATTERN", conflicts_with = "all_expired")]
+    /// Search for a pattern to find the fuse to disarm
+    #[arg(long, value_name = "PATTERN", conflicts_with = "all_detonated")]
     pub search: Option<String>,
 
-    /// Remove all expired annotations across the scan path
+    /// Remove all detonated fuses across the scan path
     #[arg(long, conflicts_with = "target")]
-    pub all_expired: bool,
+    pub all_detonated: bool,
 
-    /// Path to scan (used with --all-expired, default: current directory)
+    /// Path to scan (used with --all-detonated, default: current directory)
     #[arg(long, default_value = ".", value_name = "PATH")]
     pub path: String,
 
-    /// Path to config file (used with --all-expired)
+    /// Path to config file (used with --all-detonated)
     #[arg(long, value_name = "FILE")]
     pub config: Option<String>,
 
@@ -214,9 +214,9 @@ pub struct RemoveArgs {
     pub yes: bool,
 }
 
-/// Arguments for the `stats` subcommand.
+/// Arguments for the `intel` subcommand.
 #[derive(Debug, clap::Args)]
-pub struct StatsArgs {
+pub struct IntelArgs {
     /// Path to scan (default: current directory)
     #[arg(default_value = ".")]
     pub path: String,
@@ -229,34 +229,34 @@ pub struct StatsArgs {
     #[arg(long, value_name = "FORMAT")]
     pub format: Option<FormatArg>,
 
-    /// Warn-within threshold used for status classification (e.g. "14d")
+    /// Fuse-days threshold used for status classification (e.g. "14d")
     #[arg(long, value_name = "DURATION")]
-    pub warn_within: Option<String>,
+    pub fuse: Option<String>,
 
     /// Path to config file (default: .timebomb.toml in scan root or cwd)
     #[arg(long, value_name = "FILE")]
     pub config: Option<String>,
 }
 
-/// Arguments for the `hook` subcommand.
+/// Arguments for the `tripwire` subcommand.
 #[derive(Debug, clap::Args)]
-pub struct HookArgs {
+pub struct TripwireArgs {
     #[command(subcommand)]
-    pub command: HookCommand,
+    pub command: TripwireCommand,
 }
 
-/// Subcommands under `hook`.
+/// Subcommands under `tripwire`.
 #[derive(Debug, Subcommand)]
-pub enum HookCommand {
-    /// Install the timebomb git pre-commit hook
-    Install(HookInstallArgs),
-    /// Remove the timebomb git pre-commit hook
-    Uninstall(HookInstallArgs),
+pub enum TripwireCommand {
+    /// Install the timebomb git pre-commit tripwire
+    Set(TripwireSetArgs),
+    /// Remove the timebomb git pre-commit tripwire
+    Cut(TripwireSetArgs),
 }
 
-/// Arguments for `hook install` / `hook uninstall`.
+/// Arguments for `tripwire set` / `tripwire cut`.
 #[derive(Debug, clap::Args)]
-pub struct HookInstallArgs {
+pub struct TripwireSetArgs {
     /// Path to the git repository root (default: current directory)
     #[arg(default_value = ".")]
     pub path: String,
@@ -266,9 +266,9 @@ pub struct HookInstallArgs {
     pub yes: bool,
 }
 
-/// Arguments for the `trend` subcommand.
+/// Arguments for the `fallout` subcommand.
 #[derive(Debug, clap::Args)]
-pub struct TrendArgs {
+pub struct FalloutArgs {
     /// Path to the earlier report JSON file (baseline)
     pub report_a: String,
     /// Path to the newer report JSON file (current)
@@ -278,9 +278,9 @@ pub struct TrendArgs {
     pub format: Option<FormatArg>,
 }
 
-/// Arguments for the `fix` subcommand.
+/// Arguments for the `defuse` subcommand.
 #[derive(Debug, clap::Args)]
-pub struct FixArgs {
+pub struct DefuseArgs {
     /// Directory to scan (default: current directory)
     #[arg(default_value = ".")]
     pub path: String,
@@ -289,30 +289,30 @@ pub struct FixArgs {
     #[arg(long, value_name = "FILE")]
     pub config: Option<String>,
 
-    /// Warn-within threshold used for status classification (e.g. "14d")
+    /// Fuse-days threshold used for status classification (e.g. "14d")
     #[arg(long, value_name = "DURATION")]
-    pub warn_within: Option<String>,
+    pub fuse: Option<String>,
 }
 
-/// Arguments for the `baseline` subcommand.
+/// Arguments for the `bunker` subcommand.
 #[derive(Debug, clap::Args)]
-pub struct BaselineArgs {
+pub struct BunkerArgs {
     #[command(subcommand)]
     pub command: BaselineCommand,
 }
 
-/// Subcommands under `baseline`.
+/// Subcommands under `bunker`.
 #[derive(Debug, Subcommand)]
 pub enum BaselineCommand {
-    /// Record current annotation counts as the baseline
-    Save(BaselineSaveArgs),
+    /// Record current fuse counts as the baseline
+    Save(BunkerSaveArgs),
     /// Compare current counts against the saved baseline
-    Show(BaselineShowArgs),
+    Show(BunkerShowArgs),
 }
 
-/// Arguments for `baseline save`.
+/// Arguments for `bunker save`.
 #[derive(Debug, clap::Args)]
-pub struct BaselineSaveArgs {
+pub struct BunkerSaveArgs {
     /// Path to scan (default: current directory)
     #[arg(default_value = ".")]
     pub path: String,
@@ -325,14 +325,14 @@ pub struct BaselineSaveArgs {
     #[arg(long, default_value = ".timebomb-baseline.json", value_name = "FILE")]
     pub baseline_file: String,
 
-    /// Warn-within threshold used for status classification (e.g. "14d")
+    /// Fuse-days threshold used for status classification (e.g. "14d")
     #[arg(long, value_name = "DURATION")]
-    pub warn_within: Option<String>,
+    pub fuse: Option<String>,
 }
 
-/// Arguments for `baseline show`.
+/// Arguments for `bunker show`.
 #[derive(Debug, clap::Args)]
-pub struct BaselineShowArgs {
+pub struct BunkerShowArgs {
     /// Path to scan (default: current directory)
     #[arg(default_value = ".")]
     pub path: String,
@@ -345,15 +345,15 @@ pub struct BaselineShowArgs {
     #[arg(long, default_value = ".timebomb-baseline.json", value_name = "FILE")]
     pub baseline_file: String,
 
-    /// Warn-within threshold used for status classification (e.g. "14d")
+    /// Fuse-days threshold used for status classification (e.g. "14d")
     #[arg(long, value_name = "DURATION")]
-    pub warn_within: Option<String>,
+    pub fuse: Option<String>,
 }
 
-/// The --by flag value for `stats`.
+/// The --by flag value for `intel`.
 #[derive(Debug, Clone, PartialEq, Eq, ValueEnum)]
 pub enum GroupBy {
-    /// Break down by annotation owner
+    /// Break down by fuse owner
     Owner,
     /// Break down by tag (TODO, FIXME, etc.)
     Tag,
@@ -394,161 +394,161 @@ mod tests {
         Cli::try_parse_from(args)
     }
 
-    // ── check subcommand ──────────────────────────────────────────────────────
+    // ── sweep subcommand ──────────────────────────────────────────────────────
 
     #[test]
-    fn test_check_defaults() {
-        let cli = parse(&["timebomb", "check"]);
+    fn test_sweep_defaults() {
+        let cli = parse(&["timebomb", "sweep"]);
         match cli.command {
-            Command::Check(args) => {
+            Command::Sweep(args) => {
                 assert_eq!(args.path, ".");
-                assert!(args.warn_within.is_none());
-                assert!(!args.fail_on_warn);
+                assert!(args.fuse.is_none());
+                assert!(!args.fail_on_ticking);
                 assert!(args.format.is_none());
                 assert!(args.config.is_none());
                 assert!(args.since.is_none());
             }
-            _ => panic!("expected Check"),
+            _ => panic!("expected Sweep"),
         }
     }
 
     #[test]
-    fn test_check_custom_path() {
-        let cli = parse(&["timebomb", "check", "./src"]);
+    fn test_sweep_custom_path() {
+        let cli = parse(&["timebomb", "sweep", "./src"]);
         match cli.command {
-            Command::Check(args) => assert_eq!(args.path, "./src"),
-            _ => panic!("expected Check"),
+            Command::Sweep(args) => assert_eq!(args.path, "./src"),
+            _ => panic!("expected Sweep"),
         }
     }
 
     #[test]
-    fn test_check_warn_within() {
-        let cli = parse(&["timebomb", "check", "--warn-within", "30d"]);
+    fn test_sweep_fuse_flag() {
+        let cli = parse(&["timebomb", "sweep", "--fuse", "30d"]);
         match cli.command {
-            Command::Check(args) => {
-                assert_eq!(args.warn_within, Some("30d".to_string()));
+            Command::Sweep(args) => {
+                assert_eq!(args.fuse, Some("30d".to_string()));
             }
-            _ => panic!("expected Check"),
+            _ => panic!("expected Sweep"),
         }
     }
 
     #[test]
-    fn test_check_fail_on_warn() {
-        let cli = parse(&["timebomb", "check", "--fail-on-warn"]);
+    fn test_sweep_fail_on_ticking() {
+        let cli = parse(&["timebomb", "sweep", "--fail-on-ticking"]);
         match cli.command {
-            Command::Check(args) => assert!(args.fail_on_warn),
-            _ => panic!("expected Check"),
+            Command::Sweep(args) => assert!(args.fail_on_ticking),
+            _ => panic!("expected Sweep"),
         }
     }
 
     #[test]
-    fn test_check_format_json() {
-        let cli = parse(&["timebomb", "check", "--format", "json"]);
+    fn test_sweep_format_json() {
+        let cli = parse(&["timebomb", "sweep", "--format", "json"]);
         match cli.command {
-            Command::Check(args) => assert_eq!(args.format, Some(FormatArg::Json)),
-            _ => panic!("expected Check"),
+            Command::Sweep(args) => assert_eq!(args.format, Some(FormatArg::Json)),
+            _ => panic!("expected Sweep"),
         }
     }
 
     #[test]
-    fn test_check_format_github() {
-        let cli = parse(&["timebomb", "check", "--format", "github"]);
+    fn test_sweep_format_github() {
+        let cli = parse(&["timebomb", "sweep", "--format", "github"]);
         match cli.command {
-            Command::Check(args) => assert_eq!(args.format, Some(FormatArg::Github)),
-            _ => panic!("expected Check"),
+            Command::Sweep(args) => assert_eq!(args.format, Some(FormatArg::Github)),
+            _ => panic!("expected Sweep"),
         }
     }
 
     #[test]
-    fn test_check_format_terminal() {
-        let cli = parse(&["timebomb", "check", "--format", "terminal"]);
+    fn test_sweep_format_terminal() {
+        let cli = parse(&["timebomb", "sweep", "--format", "terminal"]);
         match cli.command {
-            Command::Check(args) => assert_eq!(args.format, Some(FormatArg::Terminal)),
-            _ => panic!("expected Check"),
+            Command::Sweep(args) => assert_eq!(args.format, Some(FormatArg::Terminal)),
+            _ => panic!("expected Sweep"),
         }
     }
 
     #[test]
-    fn test_check_config_flag() {
-        let cli = parse(&["timebomb", "check", "--config", "my.toml"]);
+    fn test_sweep_config_flag() {
+        let cli = parse(&["timebomb", "sweep", "--config", "my.toml"]);
         match cli.command {
-            Command::Check(args) => assert_eq!(args.config, Some("my.toml".to_string())),
-            _ => panic!("expected Check"),
+            Command::Sweep(args) => assert_eq!(args.config, Some("my.toml".to_string())),
+            _ => panic!("expected Sweep"),
         }
     }
 
     #[test]
-    fn test_check_all_flags_combined() {
+    fn test_sweep_all_flags_combined() {
         let cli = parse(&[
             "timebomb",
-            "check",
+            "sweep",
             "./src",
-            "--warn-within",
+            "--fuse",
             "14d",
-            "--fail-on-warn",
+            "--fail-on-ticking",
             "--format",
             "json",
             "--config",
             ".timebomb.toml",
         ]);
         match cli.command {
-            Command::Check(args) => {
+            Command::Sweep(args) => {
                 assert_eq!(args.path, "./src");
-                assert_eq!(args.warn_within, Some("14d".to_string()));
-                assert!(args.fail_on_warn);
+                assert_eq!(args.fuse, Some("14d".to_string()));
+                assert!(args.fail_on_ticking);
                 assert_eq!(args.format, Some(FormatArg::Json));
                 assert_eq!(args.config, Some(".timebomb.toml".to_string()));
             }
-            _ => panic!("expected Check"),
+            _ => panic!("expected Sweep"),
         }
     }
 
     #[test]
-    fn test_check_since_flag() {
-        let cli = parse(&["timebomb", "check", "--since", "main"]);
+    fn test_sweep_since_flag() {
+        let cli = parse(&["timebomb", "sweep", "--since", "main"]);
         match cli.command {
-            Command::Check(args) => assert_eq!(args.since, Some("main".to_string())),
-            _ => panic!("expected Check"),
+            Command::Sweep(args) => assert_eq!(args.since, Some("main".to_string())),
+            _ => panic!("expected Sweep"),
         }
     }
 
     #[test]
-    fn test_check_since_head() {
-        let cli = parse(&["timebomb", "check", "--since", "HEAD"]);
+    fn test_sweep_since_head() {
+        let cli = parse(&["timebomb", "sweep", "--since", "HEAD"]);
         match cli.command {
-            Command::Check(args) => assert_eq!(args.since, Some("HEAD".to_string())),
-            _ => panic!("expected Check"),
+            Command::Sweep(args) => assert_eq!(args.since, Some("HEAD".to_string())),
+            _ => panic!("expected Sweep"),
         }
     }
 
-    // ── add subcommand ────────────────────────────────────────────────────────
+    // ── plant subcommand ────────────────────────────────────────────────────────
 
     #[test]
-    fn test_add_message_positional() {
+    fn test_plant_message_positional() {
         // Message is now positional
         let cli = parse(&[
             "timebomb",
-            "add",
+            "plant",
             "src/main.rs:42",
             "--in-days",
             "90",
             "the message",
         ]);
         match cli.command {
-            Command::Add(args) => {
+            Command::Plant(args) => {
                 assert_eq!(args.target, "src/main.rs:42");
                 assert_eq!(args.message, "the message");
                 assert_eq!(args.in_days, Some(90));
             }
-            _ => panic!("expected Add"),
+            _ => panic!("expected Plant"),
         }
     }
 
     #[test]
-    fn test_add_with_search() {
+    fn test_plant_with_search() {
         let cli = parse(&[
             "timebomb",
-            "add",
+            "plant",
             "src/foo.rs",
             "--search",
             "legacy_auth",
@@ -557,21 +557,21 @@ mod tests {
             "msg",
         ]);
         match cli.command {
-            Command::Add(args) => {
+            Command::Plant(args) => {
                 assert_eq!(args.target, "src/foo.rs");
                 assert_eq!(args.search, Some("legacy_auth".to_string()));
                 assert_eq!(args.in_days, Some(30));
                 assert_eq!(args.message, "msg");
             }
-            _ => panic!("expected Add"),
+            _ => panic!("expected Plant"),
         }
     }
 
     #[test]
-    fn test_add_defaults() {
-        let cli = parse(&["timebomb", "add", "src/main.rs:42", "remove this"]);
+    fn test_plant_defaults() {
+        let cli = parse(&["timebomb", "plant", "src/main.rs:42", "remove this"]);
         match cli.command {
-            Command::Add(args) => {
+            Command::Plant(args) => {
                 assert_eq!(args.target, "src/main.rs:42");
                 assert_eq!(args.message, "remove this");
                 assert_eq!(args.tag, "TODO");
@@ -581,15 +581,15 @@ mod tests {
                 assert!(!args.yes);
                 assert!(args.search.is_none());
             }
-            _ => panic!("expected Add"),
+            _ => panic!("expected Plant"),
         }
     }
 
     #[test]
-    fn test_add_all_flags() {
+    fn test_plant_all_flags() {
         let cli = parse(&[
             "timebomb",
-            "add",
+            "plant",
             "src/auth.rs:10",
             "remove oauth flow",
             "--tag",
@@ -601,7 +601,7 @@ mod tests {
             "--yes",
         ]);
         match cli.command {
-            Command::Add(args) => {
+            Command::Plant(args) => {
                 assert_eq!(args.target, "src/auth.rs:10");
                 assert_eq!(args.message, "remove oauth flow");
                 assert_eq!(args.tag, "FIXME");
@@ -609,31 +609,31 @@ mod tests {
                 assert_eq!(args.date, Some("2026-09-01".to_string()));
                 assert!(args.yes);
             }
-            _ => panic!("expected Add"),
+            _ => panic!("expected Plant"),
         }
     }
 
     #[test]
-    fn test_add_in_days() {
+    fn test_plant_in_days() {
         let cli = parse(&[
             "timebomb",
-            "add",
+            "plant",
             "src/lib.rs:1",
             "cleanup",
             "--in-days",
             "90",
         ]);
         match cli.command {
-            Command::Add(args) => assert_eq!(args.in_days, Some(90)),
-            _ => panic!("expected Add"),
+            Command::Plant(args) => assert_eq!(args.in_days, Some(90)),
+            _ => panic!("expected Plant"),
         }
     }
 
     #[test]
-    fn test_add_date_and_in_days_conflict() {
+    fn test_plant_date_and_in_days_conflict() {
         let result = try_parse(&[
             "timebomb",
-            "add",
+            "plant",
             "src/lib.rs:1",
             "cleanup",
             "--date",
@@ -644,13 +644,13 @@ mod tests {
         assert!(result.is_err(), "--date and --in-days should conflict");
     }
 
-    // ── snooze subcommand ─────────────────────────────────────────────────────
+    // ── delay subcommand ─────────────────────────────────────────────────────
 
     #[test]
-    fn test_snooze_defaults() {
-        let cli = parse(&["timebomb", "snooze", "src/main.rs:42", "--in-days", "30"]);
+    fn test_delay_defaults() {
+        let cli = parse(&["timebomb", "delay", "src/main.rs:42", "--in-days", "30"]);
         match cli.command {
-            Command::Snooze(args) => {
+            Command::Delay(args) => {
                 assert_eq!(args.target, "src/main.rs:42");
                 assert_eq!(args.in_days, Some(30));
                 assert!(args.date.is_none());
@@ -658,15 +658,15 @@ mod tests {
                 assert!(args.search.is_none());
                 assert!(!args.yes);
             }
-            _ => panic!("expected Snooze"),
+            _ => panic!("expected Delay"),
         }
     }
 
     #[test]
-    fn test_snooze_with_search() {
+    fn test_delay_with_search() {
         let cli = parse(&[
             "timebomb",
-            "snooze",
+            "delay",
             "src/main.rs",
             "--search",
             "pattern",
@@ -674,38 +674,38 @@ mod tests {
             "30",
         ]);
         match cli.command {
-            Command::Snooze(args) => {
+            Command::Delay(args) => {
                 assert_eq!(args.target, "src/main.rs");
                 assert_eq!(args.search, Some("pattern".to_string()));
                 assert_eq!(args.in_days, Some(30));
             }
-            _ => panic!("expected Snooze"),
+            _ => panic!("expected Delay"),
         }
     }
 
     #[test]
-    fn test_snooze_with_date() {
+    fn test_delay_with_date() {
         let cli = parse(&[
             "timebomb",
-            "snooze",
+            "delay",
             "src/main.rs:42",
             "--date",
             "2027-01-01",
         ]);
         match cli.command {
-            Command::Snooze(args) => {
+            Command::Delay(args) => {
                 assert_eq!(args.date, Some("2027-01-01".to_string()));
                 assert!(args.in_days.is_none());
             }
-            _ => panic!("expected Snooze"),
+            _ => panic!("expected Delay"),
         }
     }
 
     #[test]
-    fn test_snooze_with_reason() {
+    fn test_delay_with_reason() {
         let cli = parse(&[
             "timebomb",
-            "snooze",
+            "delay",
             "src/main.rs:42",
             "--in-days",
             "30",
@@ -713,232 +713,232 @@ mod tests {
             "blocked upstream",
         ]);
         match cli.command {
-            Command::Snooze(args) => {
+            Command::Delay(args) => {
                 assert_eq!(args.reason, Some("blocked upstream".to_string()));
             }
-            _ => panic!("expected Snooze"),
+            _ => panic!("expected Delay"),
         }
     }
 
-    // ── remove subcommand ─────────────────────────────────────────────────────
+    // ── disarm subcommand ─────────────────────────────────────────────────────
 
     #[test]
-    fn test_remove_by_target() {
-        let cli = parse(&["timebomb", "remove", "src/main.rs:42"]);
+    fn test_disarm_by_target() {
+        let cli = parse(&["timebomb", "disarm", "src/main.rs:42"]);
         match cli.command {
-            Command::Remove(args) => {
+            Command::Disarm(args) => {
                 assert_eq!(args.target, Some("src/main.rs:42".to_string()));
                 assert!(args.search.is_none());
-                assert!(!args.all_expired);
+                assert!(!args.all_detonated);
             }
-            _ => panic!("expected Remove"),
+            _ => panic!("expected Disarm"),
         }
     }
 
     #[test]
-    fn test_remove_with_search() {
-        let cli = parse(&["timebomb", "remove", "src/main.rs", "--search", "pattern"]);
+    fn test_disarm_with_search() {
+        let cli = parse(&["timebomb", "disarm", "src/main.rs", "--search", "pattern"]);
         match cli.command {
-            Command::Remove(args) => {
+            Command::Disarm(args) => {
                 assert_eq!(args.target, Some("src/main.rs".to_string()));
                 assert_eq!(args.search, Some("pattern".to_string()));
             }
-            _ => panic!("expected Remove"),
+            _ => panic!("expected Disarm"),
         }
     }
 
     #[test]
-    fn test_remove_all_expired() {
-        let cli = parse(&["timebomb", "remove", "--all-expired", "--path", "./src"]);
+    fn test_disarm_all_detonated() {
+        let cli = parse(&["timebomb", "disarm", "--all-detonated", "--path", "./src"]);
         match cli.command {
-            Command::Remove(args) => {
-                assert!(args.all_expired);
+            Command::Disarm(args) => {
+                assert!(args.all_detonated);
                 assert_eq!(args.path, "./src");
                 assert!(args.target.is_none());
             }
-            _ => panic!("expected Remove"),
+            _ => panic!("expected Disarm"),
         }
     }
 
     #[test]
-    fn test_remove_all_expired_default_path() {
-        let cli = parse(&["timebomb", "remove", "--all-expired"]);
+    fn test_disarm_all_detonated_default_path() {
+        let cli = parse(&["timebomb", "disarm", "--all-detonated"]);
         match cli.command {
-            Command::Remove(args) => {
-                assert!(args.all_expired);
+            Command::Disarm(args) => {
+                assert!(args.all_detonated);
                 assert_eq!(args.path, ".");
             }
-            _ => panic!("expected Remove"),
+            _ => panic!("expected Disarm"),
         }
     }
 
     #[test]
-    fn test_remove_yes_flag() {
-        let cli = parse(&["timebomb", "remove", "src/main.rs:42", "--yes"]);
+    fn test_disarm_yes_flag() {
+        let cli = parse(&["timebomb", "disarm", "src/main.rs:42", "--yes"]);
         match cli.command {
-            Command::Remove(args) => assert!(args.yes),
-            _ => panic!("expected Remove"),
+            Command::Disarm(args) => assert!(args.yes),
+            _ => panic!("expected Disarm"),
         }
     }
 
-    // ── stats subcommand ──────────────────────────────────────────────────────
+    // ── intel subcommand ──────────────────────────────────────────────────────
 
     #[test]
-    fn test_stats_defaults() {
-        let cli = parse(&["timebomb", "stats"]);
+    fn test_intel_defaults() {
+        let cli = parse(&["timebomb", "intel"]);
         match cli.command {
-            Command::Stats(args) => {
+            Command::Intel(args) => {
                 assert_eq!(args.path, ".");
                 assert!(args.by.is_none());
                 assert!(args.format.is_none());
-                assert!(args.warn_within.is_none());
+                assert!(args.fuse.is_none());
                 assert!(args.config.is_none());
             }
-            _ => panic!("expected Stats"),
+            _ => panic!("expected Intel"),
         }
     }
 
     #[test]
-    fn test_stats_by_owner() {
-        let cli = parse(&["timebomb", "stats", "--by", "owner"]);
+    fn test_intel_by_owner() {
+        let cli = parse(&["timebomb", "intel", "--by", "owner"]);
         match cli.command {
-            Command::Stats(args) => assert_eq!(args.by, Some(GroupBy::Owner)),
-            _ => panic!("expected Stats"),
+            Command::Intel(args) => assert_eq!(args.by, Some(GroupBy::Owner)),
+            _ => panic!("expected Intel"),
         }
     }
 
     #[test]
-    fn test_stats_by_tag() {
-        let cli = parse(&["timebomb", "stats", "--by", "tag"]);
+    fn test_intel_by_tag() {
+        let cli = parse(&["timebomb", "intel", "--by", "tag"]);
         match cli.command {
-            Command::Stats(args) => assert_eq!(args.by, Some(GroupBy::Tag)),
-            _ => panic!("expected Stats"),
+            Command::Intel(args) => assert_eq!(args.by, Some(GroupBy::Tag)),
+            _ => panic!("expected Intel"),
         }
     }
 
     #[test]
-    fn test_stats_all_flags() {
+    fn test_intel_all_flags() {
         let cli = parse(&[
             "timebomb",
-            "stats",
+            "intel",
             "./src",
             "--by",
             "owner",
             "--format",
             "json",
-            "--warn-within",
+            "--fuse",
             "14d",
             "--config",
             "custom.toml",
         ]);
         match cli.command {
-            Command::Stats(args) => {
+            Command::Intel(args) => {
                 assert_eq!(args.path, "./src");
                 assert_eq!(args.by, Some(GroupBy::Owner));
                 assert_eq!(args.format, Some(FormatArg::Json));
-                assert_eq!(args.warn_within, Some("14d".to_string()));
+                assert_eq!(args.fuse, Some("14d".to_string()));
                 assert_eq!(args.config, Some("custom.toml".to_string()));
             }
-            _ => panic!("expected Stats"),
+            _ => panic!("expected Intel"),
         }
     }
 
-    // ── list subcommand ───────────────────────────────────────────────────────
+    // ── manifest subcommand ───────────────────────────────────────────────────
 
     #[test]
-    fn test_list_defaults() {
-        let cli = parse(&["timebomb", "list"]);
+    fn test_manifest_defaults() {
+        let cli = parse(&["timebomb", "manifest"]);
         match cli.command {
-            Command::List(args) => {
+            Command::Manifest(args) => {
                 assert_eq!(args.path, ".");
-                assert!(!args.expired);
-                assert!(args.expiring_soon.is_none());
+                assert!(!args.detonated);
+                assert!(args.ticking.is_none());
                 assert!(args.format.is_none());
-                assert!(args.warn_within.is_none());
+                assert!(args.fuse.is_none());
                 assert!(args.config.is_none());
             }
-            _ => panic!("expected List"),
+            _ => panic!("expected Manifest"),
         }
     }
 
     #[test]
-    fn test_list_expired_flag() {
-        let cli = parse(&["timebomb", "list", "--expired"]);
+    fn test_manifest_detonated_flag() {
+        let cli = parse(&["timebomb", "manifest", "--detonated"]);
         match cli.command {
-            Command::List(args) => assert!(args.expired),
-            _ => panic!("expected List"),
+            Command::Manifest(args) => assert!(args.detonated),
+            _ => panic!("expected Manifest"),
         }
     }
 
     #[test]
-    fn test_list_expiring_soon() {
-        let cli = parse(&["timebomb", "list", "--expiring-soon", "14d"]);
+    fn test_manifest_ticking() {
+        let cli = parse(&["timebomb", "manifest", "--ticking", "14d"]);
         match cli.command {
-            Command::List(args) => {
-                assert_eq!(args.expiring_soon, Some("14d".to_string()));
-                assert!(!args.expired);
+            Command::Manifest(args) => {
+                assert_eq!(args.ticking, Some("14d".to_string()));
+                assert!(!args.detonated);
             }
-            _ => panic!("expected List"),
+            _ => panic!("expected Manifest"),
         }
     }
 
     #[test]
-    fn test_list_expired_and_expiring_soon_conflict() {
-        // --expired and --expiring-soon should conflict
-        let result = try_parse(&["timebomb", "list", "--expired", "--expiring-soon", "14d"]);
+    fn test_manifest_detonated_and_ticking_conflict() {
+        // --detonated and --ticking should conflict
+        let result = try_parse(&["timebomb", "manifest", "--detonated", "--ticking", "14d"]);
         assert!(result.is_err(), "conflicting flags should produce an error");
     }
 
     #[test]
-    fn test_list_format_json() {
-        let cli = parse(&["timebomb", "list", "--format", "json"]);
+    fn test_manifest_format_json() {
+        let cli = parse(&["timebomb", "manifest", "--format", "json"]);
         match cli.command {
-            Command::List(args) => assert_eq!(args.format, Some(FormatArg::Json)),
-            _ => panic!("expected List"),
+            Command::Manifest(args) => assert_eq!(args.format, Some(FormatArg::Json)),
+            _ => panic!("expected Manifest"),
         }
     }
 
     #[test]
-    fn test_list_warn_within() {
-        let cli = parse(&["timebomb", "list", "--warn-within", "7d"]);
+    fn test_manifest_fuse_flag() {
+        let cli = parse(&["timebomb", "manifest", "--fuse", "7d"]);
         match cli.command {
-            Command::List(args) => assert_eq!(args.warn_within, Some("7d".to_string())),
-            _ => panic!("expected List"),
+            Command::Manifest(args) => assert_eq!(args.fuse, Some("7d".to_string())),
+            _ => panic!("expected Manifest"),
         }
     }
 
     #[test]
-    fn test_list_custom_path() {
-        let cli = parse(&["timebomb", "list", "./my/project"]);
+    fn test_manifest_custom_path() {
+        let cli = parse(&["timebomb", "manifest", "./my/project"]);
         match cli.command {
-            Command::List(args) => assert_eq!(args.path, "./my/project"),
-            _ => panic!("expected List"),
+            Command::Manifest(args) => assert_eq!(args.path, "./my/project"),
+            _ => panic!("expected Manifest"),
         }
     }
 
     #[test]
-    fn test_list_all_flags_combined() {
+    fn test_manifest_all_flags_combined() {
         let cli = parse(&[
             "timebomb",
-            "list",
+            "manifest",
             "./src",
-            "--expired",
+            "--detonated",
             "--format",
             "github",
-            "--warn-within",
+            "--fuse",
             "30d",
             "--config",
             "custom.toml",
         ]);
         match cli.command {
-            Command::List(args) => {
+            Command::Manifest(args) => {
                 assert_eq!(args.path, "./src");
-                assert!(args.expired);
+                assert!(args.detonated);
                 assert_eq!(args.format, Some(FormatArg::Github));
-                assert_eq!(args.warn_within, Some("30d".to_string()));
+                assert_eq!(args.fuse, Some("30d".to_string()));
                 assert_eq!(args.config, Some("custom.toml".to_string()));
             }
-            _ => panic!("expected List"),
+            _ => panic!("expected Manifest"),
         }
     }
 

@@ -19,7 +19,7 @@ fn scan_str(
     path: &Path,
     cfg: &Config,
     today: chrono::NaiveDate,
-) -> timebomb::error::Result<Vec<timebomb::annotation::Annotation>> {
+) -> timebomb::error::Result<Vec<timebomb::annotation::Fuse>> {
     let regex = build_regex(cfg)?;
     scan_content(src, path, &regex, cfg, today)
 }
@@ -37,9 +37,9 @@ fn fixture_path(name: &str) -> PathBuf {
 }
 
 /// Fixed "today" used across all tests: 2025-06-01.
-/// Past dates (2020-01-01) will be Expired.
-/// Near-future dates (2025-06-08, 2025-06-10) will be ExpiringSoon when warn window >= 9.
-/// Far-future dates (2099-01-01) will always be Ok.
+/// Past dates (2020-01-01) will be Detonated.
+/// Near-future dates (2025-06-08, 2025-06-10) will be Ticking when fuse window >= 9.
+/// Far-future dates (2099-01-01) will always be Inert.
 fn today() -> chrono::NaiveDate {
     chrono::NaiveDate::parse_from_str("2025-06-01", "%Y-%m-%d").unwrap()
 }
@@ -48,9 +48,9 @@ fn default_config() -> Config {
     Config::default()
 }
 
-fn config_with_warn(days: u32) -> Config {
+fn config_with_fuse(days: u32) -> Config {
     Config {
-        warn_within_days: days,
+        fuse_days: days,
         ..Config::default()
     }
 }
@@ -58,23 +58,23 @@ fn config_with_warn(days: u32) -> Config {
 // ─── Fixture: sample.rs ───────────────────────────────────────────────────────
 
 #[test]
-fn test_sample_rs_expired_count() {
+fn test_sample_rs_detonated_count() {
     let path = fixture_path("sample.rs");
     let cfg = default_config();
     let regex = build_regex(&cfg).unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
     let rel = Path::new("tests/fixtures/sample.rs");
 
-    let anns = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
-    let expired: Vec<_> = anns.iter().filter(|a| a.is_expired()).collect();
+    let fuses = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
+    let detonated: Vec<_> = fuses.iter().filter(|a| a.is_detonated()).collect();
 
-    // sample.rs has 6 expired annotations (5 unowned + 1 owned by alice)
+    // sample.rs has 6 detonated fuses (5 unowned + 1 owned by alice)
     assert_eq!(
-        expired.len(),
+        detonated.len(),
         6,
-        "expected 6 expired annotations in sample.rs, got {}: {:?}",
-        expired.len(),
-        expired
+        "expected 6 detonated fuses in sample.rs, got {}: {:?}",
+        detonated.len(),
+        detonated
             .iter()
             .map(|a| (&a.tag, a.date_str()))
             .collect::<Vec<_>>()
@@ -89,17 +89,17 @@ fn test_sample_rs_future_count() {
     let content = std::fs::read_to_string(&path).unwrap();
     let rel = Path::new("tests/fixtures/sample.rs");
 
-    let anns = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
+    let fuses = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
 
-    // With warn_within=0, the 2025-06-08 and 2025-06-10 items are ExpiringSoon (0 days <= 0 is false for those)
-    // Actually with warn_within=0: days_remaining for 2025-06-08 is 7 > 0 so Ok;
-    // days_remaining for 2025-06-10 is 9 > 0 so Ok.
-    // Future (2099-*): 4 annotations
-    let ok: Vec<_> = anns.iter().filter(|a| a.status == Status::Ok).collect();
+    // With fuse_days=0, the 2025-06-08 and 2025-06-10 items are Ticking (0 days <= 0 is false for those)
+    // Actually with fuse_days=0: days_remaining for 2025-06-08 is 7 > 0 so Inert;
+    // days_remaining for 2025-06-10 is 9 > 0 so Inert.
+    // Future (2099-*): 4 fuses
+    let inert: Vec<_> = fuses.iter().filter(|a| a.status == Status::Inert).collect();
     assert!(
-        ok.len() >= 4,
-        "expected at least 4 ok annotations in sample.rs, got {}",
-        ok.len()
+        inert.len() >= 4,
+        "expected at least 4 inert fuses in sample.rs, got {}",
+        inert.len()
     );
 }
 
@@ -111,15 +111,15 @@ fn test_sample_rs_plain_todos_not_matched() {
     let content = std::fs::read_to_string(&path).unwrap();
     let rel = Path::new("tests/fixtures/sample.rs");
 
-    let anns = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
+    let fuses = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
 
-    // There must be no annotation with an empty message or one that came from a plain TODO comment
+    // There must be no fuse with an empty message or one that came from a plain TODO comment
     // Plain "// TODO: this is a plain TODO..." must not produce any match
-    for ann in &anns {
+    for fuse in &fuses {
         assert!(
-            !ann.message.starts_with("this is a plain"),
+            !fuse.message.starts_with("this is a plain"),
             "plain TODO should not be matched: {:?}",
-            ann
+            fuse
         );
     }
 }
@@ -130,9 +130,9 @@ fn test_sample_rs_space_before_bracket_not_matched() {
     let src = "// TODO [2020-01-01]: space before bracket should not match\n";
     let cfg = default_config();
     let regex = build_regex(&cfg).unwrap();
-    let anns = scan_content(src, Path::new("test.rs"), &regex, &cfg, today()).unwrap();
+    let fuses = scan_content(src, Path::new("test.rs"), &regex, &cfg, today()).unwrap();
     assert!(
-        anns.is_empty(),
+        fuses.is_empty(),
         "space between tag and bracket must not produce a match"
     );
 }
@@ -142,9 +142,9 @@ fn test_sample_rs_note_tag_not_matched() {
     // NOTE is not in the default tag list
     let src = "// NOTE[2020-01-01]: this should not be matched\n";
     let cfg = default_config();
-    let anns = scan_str(src, Path::new("test.rs"), &cfg, today()).unwrap();
+    let fuses = scan_str(src, Path::new("test.rs"), &cfg, today()).unwrap();
     assert!(
-        anns.is_empty(),
+        fuses.is_empty(),
         "NOTE tag must not match with default config"
     );
 }
@@ -157,14 +157,14 @@ fn test_sample_rs_alice_owner_detected() {
     let content = std::fs::read_to_string(&path).unwrap();
     let rel = Path::new("tests/fixtures/sample.rs");
 
-    let anns = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
-    let alice_ann = anns
+    let fuses = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
+    let alice_fuse = fuses
         .iter()
         .find(|a| a.owner.as_deref() == Some("alice"))
-        .expect("should find annotation owned by alice");
+        .expect("should find fuse owned by alice");
 
-    assert_eq!(alice_ann.tag, "TODO");
-    assert!(alice_ann.is_expired());
+    assert_eq!(alice_fuse.tag, "TODO");
+    assert!(alice_fuse.is_detonated());
 }
 
 #[test]
@@ -175,31 +175,31 @@ fn test_sample_rs_bob_owner_detected() {
     let content = std::fs::read_to_string(&path).unwrap();
     let rel = Path::new("tests/fixtures/sample.rs");
 
-    let anns = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
-    let bob_ann = anns
+    let fuses = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
+    let bob_fuse = fuses
         .iter()
         .find(|a| a.owner.as_deref() == Some("bob"))
-        .expect("should find annotation owned by bob");
+        .expect("should find fuse owned by bob");
 
-    assert_eq!(bob_ann.tag, "TODO");
-    assert_eq!(bob_ann.status, Status::Ok);
+    assert_eq!(bob_fuse.tag, "TODO");
+    assert_eq!(bob_fuse.status, Status::Inert);
 }
 
 #[test]
-fn test_sample_rs_expiring_soon_with_wide_window() {
-    // With warn_within=30d, the 2025-06-08 and 2025-06-10 items should be ExpiringSoon
+fn test_sample_rs_ticking_with_wide_window() {
+    // With fuse_days=30d, the 2025-06-08 and 2025-06-10 items should be Ticking
     let path = fixture_path("sample.rs");
-    let cfg = config_with_warn(30);
+    let cfg = config_with_fuse(30);
     let regex = build_regex(&cfg).unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
     let rel = Path::new("tests/fixtures/sample.rs");
 
-    let anns = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
-    let soon: Vec<_> = anns.iter().filter(|a| a.is_expiring_soon()).collect();
+    let fuses = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
+    let ticking: Vec<_> = fuses.iter().filter(|a| a.is_ticking()).collect();
     assert!(
-        soon.len() >= 2,
-        "expected at least 2 expiring-soon annotations with 30d window, got {}",
-        soon.len()
+        ticking.len() >= 2,
+        "expected at least 2 ticking fuses with 30d window, got {}",
+        ticking.len()
     );
 }
 
@@ -211,13 +211,13 @@ fn test_sample_rs_all_tags_present() {
     let content = std::fs::read_to_string(&path).unwrap();
     let rel = Path::new("tests/fixtures/sample.rs");
 
-    let anns = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
-    let tags: std::collections::HashSet<&str> = anns.iter().map(|a| a.tag.as_str()).collect();
+    let fuses = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
+    let tags: std::collections::HashSet<&str> = fuses.iter().map(|a| a.tag.as_str()).collect();
 
     for expected_tag in &["TODO", "FIXME", "HACK", "TEMP", "REMOVEME"] {
         assert!(
             tags.contains(expected_tag),
-            "expected tag {} to appear in sample.rs annotations",
+            "expected tag {} to appear in sample.rs fuses",
             expected_tag
         );
     }
@@ -226,22 +226,22 @@ fn test_sample_rs_all_tags_present() {
 // ─── Fixture: sample.py ───────────────────────────────────────────────────────
 
 #[test]
-fn test_sample_py_expired_count() {
+fn test_sample_py_detonated_count() {
     let path = fixture_path("sample.py");
     let cfg = default_config();
     let regex = build_regex(&cfg).unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
     let rel = Path::new("tests/fixtures/sample.py");
 
-    let anns = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
-    let expired: Vec<_> = anns.iter().filter(|a| a.is_expired()).collect();
+    let fuses = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
+    let detonated: Vec<_> = fuses.iter().filter(|a| a.is_detonated()).collect();
 
-    // sample.py has 6 expired annotations (5 unowned + 1 owned by carol)
+    // sample.py has 6 detonated fuses (5 unowned + 1 owned by carol)
     assert_eq!(
-        expired.len(),
+        detonated.len(),
         6,
-        "expected 6 expired annotations in sample.py, got {}",
-        expired.len()
+        "expected 6 detonated fuses in sample.py, got {}",
+        detonated.len()
     );
 }
 
@@ -250,11 +250,11 @@ fn test_sample_py_hash_prefix_tags_detected() {
     // Python uses # comments — make sure # prefix doesn't confuse the scanner
     let src = "# TODO[2020-01-01]: python style comment\n";
     let cfg = default_config();
-    let anns = scan_str(src, Path::new("test.py"), &cfg, today()).unwrap();
-    assert_eq!(anns.len(), 1);
-    assert_eq!(anns[0].tag, "TODO");
-    assert_eq!(anns[0].message, "python style comment");
-    assert!(anns[0].is_expired());
+    let fuses = scan_str(src, Path::new("test.py"), &cfg, today()).unwrap();
+    assert_eq!(fuses.len(), 1);
+    assert_eq!(fuses[0].tag, "TODO");
+    assert_eq!(fuses[0].message, "python style comment");
+    assert!(fuses[0].is_detonated());
 }
 
 #[test]
@@ -265,35 +265,35 @@ fn test_sample_py_owner_carol_detected() {
     let content = std::fs::read_to_string(&path).unwrap();
     let rel = Path::new("tests/fixtures/sample.py");
 
-    let anns = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
-    let carol_ann = anns
+    let fuses = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
+    let carol_fuse = fuses
         .iter()
         .find(|a| a.owner.as_deref() == Some("carol"))
-        .expect("should find annotation owned by carol");
+        .expect("should find fuse owned by carol");
 
-    assert!(carol_ann.is_expired());
+    assert!(carol_fuse.is_detonated());
 }
 
 #[test]
-fn test_sample_py_future_annotations_are_ok() {
+fn test_sample_py_future_fuses_are_inert() {
     let path = fixture_path("sample.py");
     let cfg = default_config();
     let regex = build_regex(&cfg).unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
     let rel = Path::new("tests/fixtures/sample.py");
 
-    let anns = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
-    let future: Vec<_> = anns
+    let fuses = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
+    let future: Vec<_> = fuses
         .iter()
         .filter(|a| a.date.year() == 2099 || a.date.year() == 2088)
         .collect();
 
-    for ann in &future {
+    for fuse in &future {
         assert_eq!(
-            ann.status,
-            Status::Ok,
-            "far-future annotation should be Ok: {:?}",
-            ann
+            fuse.status,
+            Status::Inert,
+            "far-future fuse should be Inert: {:?}",
+            fuse
         );
     }
 }
@@ -306,15 +306,14 @@ fn test_sample_py_plain_todos_ignored() {
     let content = std::fs::read_to_string(&path).unwrap();
     let rel = Path::new("tests/fixtures/sample.py");
 
-    let anns = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
+    let fuses = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
 
-    // None of the annotations should have empty messages or messages starting
-    // with "plain todo"
-    for ann in &anns {
+    // None of the fuses should have empty messages or messages starting with "plain todo"
+    for fuse in &fuses {
         assert!(
-            !ann.message.to_lowercase().starts_with("plain todo"),
+            !fuse.message.to_lowercase().starts_with("plain todo"),
             "plain TODO should not be matched: {:?}",
-            ann
+            fuse
         );
     }
 }
@@ -322,22 +321,22 @@ fn test_sample_py_plain_todos_ignored() {
 // ─── Fixture: sample.sql ─────────────────────────────────────────────────────
 
 #[test]
-fn test_sample_sql_expired_count() {
+fn test_sample_sql_detonated_count() {
     let path = fixture_path("sample.sql");
     let cfg = default_config();
     let regex = build_regex(&cfg).unwrap();
     let content = std::fs::read_to_string(&path).unwrap();
     let rel = Path::new("tests/fixtures/sample.sql");
 
-    let anns = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
-    let expired: Vec<_> = anns.iter().filter(|a| a.is_expired()).collect();
+    let fuses = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
+    let detonated: Vec<_> = fuses.iter().filter(|a| a.is_detonated()).collect();
 
-    // sample.sql has 6 expired annotations (5 unowned + 1 owned by eve)
+    // sample.sql has 6 detonated fuses (5 unowned + 1 owned by eve)
     assert_eq!(
-        expired.len(),
+        detonated.len(),
         6,
-        "expected 6 expired annotations in sample.sql, got {}",
-        expired.len()
+        "expected 6 detonated fuses in sample.sql, got {}",
+        detonated.len()
     );
 }
 
@@ -346,10 +345,10 @@ fn test_sample_sql_double_dash_prefix_detected() {
     // SQL uses -- comments
     let src = "-- TODO[2020-01-01]: drop this column\n";
     let cfg = default_config();
-    let anns = scan_str(src, Path::new("schema.sql"), &cfg, today()).unwrap();
-    assert_eq!(anns.len(), 1);
-    assert_eq!(anns[0].tag, "TODO");
-    assert_eq!(anns[0].message, "drop this column");
+    let fuses = scan_str(src, Path::new("schema.sql"), &cfg, today()).unwrap();
+    assert_eq!(fuses.len(), 1);
+    assert_eq!(fuses[0].tag, "TODO");
+    assert_eq!(fuses[0].message, "drop this column");
 }
 
 #[test]
@@ -360,13 +359,13 @@ fn test_sample_sql_owner_eve_detected() {
     let content = std::fs::read_to_string(&path).unwrap();
     let rel = Path::new("tests/fixtures/sample.sql");
 
-    let anns = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
-    let eve_ann = anns
+    let fuses = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
+    let eve_fuse = fuses
         .iter()
         .find(|a| a.owner.as_deref() == Some("eve"))
-        .expect("should find annotation owned by eve");
+        .expect("should find fuse owned by eve");
 
-    assert!(eve_ann.is_expired());
+    assert!(eve_fuse.is_detonated());
 }
 
 #[test]
@@ -377,13 +376,13 @@ fn test_sample_sql_owner_frank_detected() {
     let content = std::fs::read_to_string(&path).unwrap();
     let rel = Path::new("tests/fixtures/sample.sql");
 
-    let anns = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
-    let frank_ann = anns
+    let fuses = scan_content(&content, rel, &regex, &cfg, today()).unwrap();
+    let frank_fuse = fuses
         .iter()
         .find(|a| a.owner.as_deref() == Some("frank"))
-        .expect("should find annotation owned by frank");
+        .expect("should find fuse owned by frank");
 
-    assert_eq!(frank_ann.status, Status::Ok);
+    assert_eq!(frank_fuse.status, Status::Inert);
 }
 
 // ─── Full directory scan ──────────────────────────────────────────────────────
@@ -395,37 +394,37 @@ fn test_scan_fixtures_dir_finds_all_files() {
 
     let result = scan(&dir, &cfg, today()).unwrap();
 
-    // 24 fixture files: rs, py, sql, ts, rb, go, js, hs, fs, cs, java, php, clj, lisp, rkt,
-    //                    ex, erl, c, cpp, d, swift, ml, lua, dart
+    // 25 fixture files: rs, py, sql, ts, rb, go, js, hs, fs, cs, java, php, clj, lisp, rkt,
+    //                    ex, erl, c, cpp, d, swift, ml, lua, dart, kt
     assert_eq!(
-        result.scanned_files, 24,
-        "expected 24 scanned files in fixtures dir, got {}",
-        result.scanned_files
+        result.swept_files, 25,
+        "expected 25 swept files in fixtures dir, got {}",
+        result.swept_files
     );
 }
 
 #[test]
-fn test_scan_fixtures_dir_has_expired() {
+fn test_scan_fixtures_dir_has_detonated() {
     let dir = fixtures_dir();
     let cfg = default_config();
     let result = scan(&dir, &cfg, today()).unwrap();
     assert!(
-        result.has_expired(),
-        "fixtures directory must contain expired annotations"
+        result.has_detonated(),
+        "fixtures directory must contain detonated fuses"
     );
 }
 
 #[test]
-fn test_scan_fixtures_dir_total_expired_count() {
+fn test_scan_fixtures_dir_total_detonated_count() {
     let dir = fixtures_dir();
     let cfg = default_config();
     let result = scan(&dir, &cfg, today()).unwrap();
 
-    let expired_count = result.expired().len();
+    let detonated_count = result.detonated().len();
     assert_eq!(
-        expired_count, 96,
-        "expected 96 total expired annotations across all fixture files, got {}",
-        expired_count
+        detonated_count, 100,
+        "expected 100 total detonated fuses across all fixture files, got {}",
+        detonated_count
     );
 }
 
@@ -435,7 +434,7 @@ fn test_scan_fixtures_dir_sorted_by_date() {
     let cfg = default_config();
     let result = scan(&dir, &cfg, today()).unwrap();
 
-    let dates: Vec<_> = result.annotations.iter().map(|a| a.date).collect();
+    let dates: Vec<_> = result.fuses.iter().map(|a| a.date).collect();
     let mut sorted = dates.clone();
     sorted.sort();
     assert_eq!(
@@ -445,46 +444,46 @@ fn test_scan_fixtures_dir_sorted_by_date() {
 }
 
 #[test]
-fn test_scan_fixtures_dir_expiring_soon_with_wide_window() {
+fn test_scan_fixtures_dir_ticking_with_wide_window() {
     let dir = fixtures_dir();
-    let cfg = config_with_warn(30);
+    let cfg = config_with_fuse(30);
     let result = scan(&dir, &cfg, today()).unwrap();
 
-    // rs/py/go/js/ts: 2 each; rb/hs/fs/cs/java/php/clj/lisp/rkt/ex/erl/c/cpp/d: 1 each; sql: 0
-    let soon_count = result.expiring_soon().len();
+    // rs/py/go/js/ts: 2 each; rb/hs/fs/cs/java/php/clj/lisp/rkt/ex/erl/c/cpp/d/kt: 1 each; sql: 0
+    let ticking_count = result.ticking().len();
     assert_eq!(
-        soon_count, 28,
-        "expected 28 expiring-soon annotations with 30d window across fixture files, got {}",
-        soon_count
+        ticking_count, 29,
+        "expected 29 ticking fuses with 30d window across fixture files, got {}",
+        ticking_count
     );
 }
 
 #[test]
-fn test_scan_fixtures_dir_has_expiring_soon_with_wide_window() {
+fn test_scan_fixtures_dir_has_ticking_with_wide_window() {
     let dir = fixtures_dir();
-    let cfg = config_with_warn(30);
+    let cfg = config_with_fuse(30);
     let result = scan(&dir, &cfg, today()).unwrap();
     assert!(
-        result.has_expiring_soon(),
-        "should detect expiring-soon annotations with 30d window"
+        result.is_ticking(),
+        "should detect ticking fuses with 30d window"
     );
 }
 
-// ─── Inline annotation pattern tests ─────────────────────────────────────────
+// ─── Inline fuse pattern tests ────────────────────────────────────────────────
 
 #[test]
 fn test_all_five_default_tags_matched() {
     let src = "\
-// TODO[2020-01-01]: todo expired
-// FIXME[2020-01-01]: fixme expired
-// HACK[2020-01-01]: hack expired
-// TEMP[2020-01-01]: temp expired
-// REMOVEME[2020-01-01]: removeme expired
+// TODO[2020-01-01]: todo detonated
+// FIXME[2020-01-01]: fixme detonated
+// HACK[2020-01-01]: hack detonated
+// TEMP[2020-01-01]: temp detonated
+// REMOVEME[2020-01-01]: removeme detonated
 ";
     let cfg = default_config();
-    let anns = scan_str(src, Path::new("tags.rs"), &cfg, today()).unwrap();
-    assert_eq!(anns.len(), 5);
-    let tags: Vec<&str> = anns.iter().map(|a| a.tag.as_str()).collect();
+    let fuses = scan_str(src, Path::new("tags.rs"), &cfg, today()).unwrap();
+    assert_eq!(fuses.len(), 5);
+    let tags: Vec<&str> = fuses.iter().map(|a| a.tag.as_str()).collect();
     assert!(tags.contains(&"TODO"));
     assert!(tags.contains(&"FIXME"));
     assert!(tags.contains(&"HACK"));
@@ -500,30 +499,30 @@ fn test_case_insensitive_tags() {
 // HACK[2020-01-01]: uppercase hack
 ";
     let cfg = default_config();
-    let anns = scan_str(src, Path::new("case.rs"), &cfg, today()).unwrap();
-    assert_eq!(anns.len(), 3);
+    let fuses = scan_str(src, Path::new("case.rs"), &cfg, today()).unwrap();
+    assert_eq!(fuses.len(), 3);
     // All tags should be normalised to upper case
-    for ann in &anns {
+    for fuse in &fuses {
         assert_eq!(
-            ann.tag,
-            ann.tag.to_uppercase(),
+            fuse.tag,
+            fuse.tag.to_uppercase(),
             "tag should be uppercased: {}",
-            ann.tag
+            fuse.tag
         );
     }
 }
 
 #[test]
-fn test_annotation_on_same_line_as_code() {
+fn test_fuse_on_same_line_as_code() {
     let src = r#"let x = some_func(); // TODO[2020-01-01]: refactor this inline"#;
     let cfg = default_config();
-    let anns = scan_str(src, Path::new("inline.rs"), &cfg, today()).unwrap();
-    assert_eq!(anns.len(), 1);
-    assert_eq!(anns[0].message, "refactor this inline");
+    let fuses = scan_str(src, Path::new("inline.rs"), &cfg, today()).unwrap();
+    assert_eq!(fuses.len(), 1);
+    assert_eq!(fuses[0].message, "refactor this inline");
 }
 
 #[test]
-fn test_multiple_annotations_on_separate_lines() {
+fn test_multiple_fuses_on_separate_lines() {
     let src = "\
 fn foo() {
     // TODO[2020-01-01]: first
@@ -534,10 +533,10 @@ fn foo() {
 }
 ";
     let cfg = default_config();
-    let anns = scan_str(src, Path::new("multi.rs"), &cfg, today()).unwrap();
-    assert_eq!(anns.len(), 3);
+    let fuses = scan_str(src, Path::new("multi.rs"), &cfg, today()).unwrap();
+    assert_eq!(fuses.len(), 3);
     // Verify line numbers (1-based)
-    let lines: Vec<usize> = anns.iter().map(|a| a.line).collect();
+    let lines: Vec<usize> = fuses.iter().map(|a| a.line).collect();
     assert!(lines.contains(&2), "line 2 should have TODO");
     assert!(lines.contains(&4), "line 4 should have FIXME");
     assert!(lines.contains(&6), "line 6 should have HACK");
@@ -547,34 +546,34 @@ fn foo() {
 fn test_owner_with_spaces_trimmed() {
     let src = "// TODO[2020-01-01][ alice ]: trimmed owner\n";
     let cfg = default_config();
-    let anns = scan_str(src, Path::new("owner.rs"), &cfg, today()).unwrap();
-    assert_eq!(anns.len(), 1);
+    let fuses = scan_str(src, Path::new("owner.rs"), &cfg, today()).unwrap();
+    assert_eq!(fuses.len(), 1);
     // The owner is captured as the content between brackets; the scanner trims it
-    assert_eq!(anns[0].owner.as_deref(), Some("alice"));
+    assert_eq!(fuses[0].owner.as_deref(), Some("alice"));
 }
 
 #[test]
-fn test_invalid_date_produces_no_annotation() {
+fn test_invalid_date_produces_no_fuse() {
     // Month 13 is not valid — should warn to stderr and skip
     let src = "// TODO[2026-13-01]: invalid month\n";
     let cfg = default_config();
-    let anns = scan_str(src, Path::new("bad.rs"), &cfg, today()).unwrap();
+    let fuses = scan_str(src, Path::new("bad.rs"), &cfg, today()).unwrap();
     assert!(
-        anns.is_empty(),
-        "invalid date should produce no annotation, got {:?}",
-        anns
+        fuses.is_empty(),
+        "invalid date should produce no fuse, got {:?}",
+        fuses
     );
 }
 
 #[test]
-fn test_invalid_day_produces_no_annotation() {
+fn test_invalid_day_produces_no_fuse() {
     let src = "// FIXME[2026-02-30]: invalid day\n";
     let cfg = default_config();
-    let anns = scan_str(src, Path::new("bad.rs"), &cfg, today()).unwrap();
+    let fuses = scan_str(src, Path::new("bad.rs"), &cfg, today()).unwrap();
     assert!(
-        anns.is_empty(),
-        "invalid day should produce no annotation, got {:?}",
-        anns
+        fuses.is_empty(),
+        "invalid day should produce no fuse, got {:?}",
+        fuses
     );
 }
 
@@ -582,9 +581,9 @@ fn test_invalid_day_produces_no_annotation() {
 fn test_message_with_colons_and_special_chars() {
     let src = "// TODO[2020-01-01]: fix https://example.com/path?q=1&r=2 handling\n";
     let cfg = default_config();
-    let anns = scan_str(src, Path::new("url.rs"), &cfg, today()).unwrap();
-    assert_eq!(anns.len(), 1);
-    assert!(anns[0].message.contains("https://"));
+    let fuses = scan_str(src, Path::new("url.rs"), &cfg, today()).unwrap();
+    assert_eq!(fuses.len(), 1);
+    assert!(fuses[0].message.contains("https://"));
 }
 
 #[test]
@@ -592,8 +591,8 @@ fn test_file_path_stored_as_relative() {
     let src = "// TODO[2020-01-01]: check path\n";
     let cfg = default_config();
     let rel = Path::new("some/deep/path/file.rs");
-    let anns = scan_str(src, rel, &cfg, today()).unwrap();
-    assert_eq!(anns[0].file, rel);
+    let fuses = scan_str(src, rel, &cfg, today()).unwrap();
+    assert_eq!(fuses[0].file, rel);
 }
 
 // ─── Binary file detection ────────────────────────────────────────────────────
@@ -605,9 +604,9 @@ fn test_scan_skips_binary_files() {
     use std::io::Write;
     let dir = tempfile::tempdir().unwrap();
 
-    // A text file with an annotation — should be scanned.
+    // A text file with a fuse — should be scanned.
     let mut text = std::fs::File::create(dir.path().join("ok.rs")).unwrap();
-    writeln!(text, "// TODO[2020-01-01]: expired annotation").unwrap();
+    writeln!(text, "// TODO[2020-01-01]: detonated fuse").unwrap();
 
     // A binary file (contains null byte) — should be skipped.
     let mut bin = std::fs::File::create(dir.path().join("blob.bin")).unwrap();
@@ -620,43 +619,43 @@ fn test_scan_skips_binary_files() {
     let result = scan(dir.path(), &cfg, today()).unwrap();
 
     assert_eq!(
-        result.scanned_files, 1,
-        "only the text file should be scanned"
+        result.swept_files, 1,
+        "only the text file should be swept"
     );
     assert_eq!(
         result.skipped_files, 1,
         "the binary file should be counted as skipped"
     );
-    assert_eq!(result.annotations.len(), 1);
+    assert_eq!(result.fuses.len(), 1);
 }
 
-// ─── Custom tag configuration ─────────────────────────────────────────────────
+// ─── Custom trigger configuration ─────────────────────────────────────────────
 
 #[test]
-fn test_custom_tag_only_matches_custom() {
+fn test_custom_trigger_only_matches_custom() {
     let src = "\
 // TODO[2020-01-01]: standard tag — should NOT match
 // CUSTOM[2020-01-01]: custom tag — should match
 // FIXME[2020-01-01]: another standard — should NOT match
 ";
     let cfg = Config {
-        tags: vec!["CUSTOM".to_string()],
+        triggers: vec!["CUSTOM".to_string()],
         ..Config::default()
     };
-    let anns = scan_str(src, Path::new("custom.rs"), &cfg, today()).unwrap();
-    assert_eq!(anns.len(), 1, "only CUSTOM tag should match");
-    assert_eq!(anns[0].tag, "CUSTOM");
+    let fuses = scan_str(src, Path::new("custom.rs"), &cfg, today()).unwrap();
+    assert_eq!(fuses.len(), 1, "only CUSTOM trigger should match");
+    assert_eq!(fuses[0].tag, "CUSTOM");
 }
 
 #[test]
-fn test_empty_file_produces_no_annotations() {
+fn test_empty_file_produces_no_fuses() {
     let cfg = default_config();
-    let anns = scan_str("", Path::new("empty.rs"), &cfg, today()).unwrap();
-    assert!(anns.is_empty());
+    let fuses = scan_str("", Path::new("empty.rs"), &cfg, today()).unwrap();
+    assert!(fuses.is_empty());
 }
 
 #[test]
-fn test_file_with_only_plain_todos_produces_no_annotations() {
+fn test_file_with_only_plain_todos_produces_no_fuses() {
     let src = "\
 // TODO: this
 // FIXME: that
@@ -665,51 +664,51 @@ fn test_file_with_only_plain_todos_produces_no_annotations() {
 // TODO - do this later
 ";
     let cfg = default_config();
-    let anns = scan_str(src, Path::new("plain.rs"), &cfg, today()).unwrap();
+    let fuses = scan_str(src, Path::new("plain.rs"), &cfg, today()).unwrap();
     assert!(
-        anns.is_empty(),
-        "plain TODOs without date brackets must not produce annotations"
+        fuses.is_empty(),
+        "plain TODOs without date brackets must not produce fuses"
     );
 }
 
 // ─── scan_result helpers ──────────────────────────────────────────────────────
 
 #[test]
-fn test_scan_result_expired_helper() {
+fn test_scan_result_detonated_helper() {
     let dir = fixtures_dir();
     let cfg = default_config();
     let result = scan(&dir, &cfg, today()).unwrap();
 
-    let expired = result.expired();
-    assert!(!expired.is_empty());
-    for ann in &expired {
-        assert_eq!(ann.status, Status::Expired);
+    let detonated = result.detonated();
+    assert!(!detonated.is_empty());
+    for fuse in &detonated {
+        assert_eq!(fuse.status, Status::Detonated);
     }
 }
 
 #[test]
-fn test_scan_result_ok_helper() {
+fn test_scan_result_inert_helper() {
     let dir = fixtures_dir();
     let cfg = default_config();
     let result = scan(&dir, &cfg, today()).unwrap();
 
-    let ok = result.ok();
-    assert!(!ok.is_empty());
-    for ann in ok {
-        assert_eq!(ann.status, Status::Ok);
+    let inert = result.inert();
+    assert!(!inert.is_empty());
+    for fuse in inert {
+        assert_eq!(fuse.status, Status::Inert);
     }
 }
 
 #[test]
 fn test_scan_result_total_equals_sum_of_parts() {
     let dir = fixtures_dir();
-    let cfg = config_with_warn(30);
+    let cfg = config_with_fuse(30);
     let result = scan(&dir, &cfg, today()).unwrap();
 
     let total = result.total();
-    let sum = result.expired().len() + result.expiring_soon().len() + result.ok().len();
+    let sum = result.detonated().len() + result.ticking().len() + result.inert().len();
     assert_eq!(
         total, sum,
-        "total() must equal expired + expiring_soon + ok"
+        "total() must equal detonated + ticking + inert"
     );
 }

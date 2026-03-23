@@ -5,11 +5,11 @@ const MARKER_BEGIN: &str = "# BEGIN timebomb";
 const MARKER_END: &str = "# END timebomb";
 
 /// The block inserted into (or appended to) the pre-commit hook.
-const HOOK_BLOCK: &str = "# BEGIN timebomb\ntimebomb check --since HEAD .\n# END timebomb\n";
+const HOOK_BLOCK: &str = "# BEGIN timebomb\ntimebomb sweep --since HEAD .\n# END timebomb\n";
 
 /// Content of a freshly-created pre-commit hook file.
 const NEW_HOOK_CONTENT: &str =
-    "#!/bin/sh\nset -e\n# BEGIN timebomb\ntimebomb check --since HEAD .\n# END timebomb\n";
+    "#!/bin/sh\nset -e\n# BEGIN timebomb\ntimebomb sweep --since HEAD .\n# END timebomb\n";
 
 /// Walk up from `path` looking for a `.git` directory or file.
 fn find_git_dir(path: &Path) -> Result<PathBuf> {
@@ -258,7 +258,7 @@ mod tests {
         let content = std::fs::read_to_string(&hook_path).unwrap();
         assert!(content.contains(MARKER_BEGIN));
         assert!(content.contains(MARKER_END));
-        assert!(content.contains("timebomb check --since HEAD ."));
+        assert!(content.contains("timebomb sweep --since HEAD ."));
 
         // Check executable bit on Unix.
         #[cfg(unix)]
@@ -310,7 +310,7 @@ mod tests {
             "original content preserved"
         );
         assert!(content.contains(MARKER_BEGIN), "timebomb block appended");
-        assert!(content.contains("timebomb check --since HEAD ."));
+        assert!(content.contains("timebomb sweep --since HEAD ."));
     }
 
     #[test]
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn test_remove_timebomb_block_basic() {
-        let input = "line before\n# BEGIN timebomb\ntimebomb check --since HEAD .\n# END timebomb\nline after\n";
+        let input = "line before\n# BEGIN timebomb\ntimebomb sweep --since HEAD .\n# END timebomb\nline after\n";
         let output = remove_timebomb_block(input);
         assert!(!output.contains(MARKER_BEGIN));
         assert!(!output.contains(MARKER_END));
@@ -437,7 +437,7 @@ mod tests {
 #!/bin/sh\n\
 echo before\n\
 # BEGIN timebomb\n\
-timebomb check --since HEAD .\n\
+timebomb sweep --since HEAD .\n\
 # END timebomb\n\
 echo after\n\
 ";
@@ -494,6 +494,6 @@ echo after\n\
         // HOOK_BLOCK itself must contain both markers and the check command.
         assert!(HOOK_BLOCK.contains(MARKER_BEGIN));
         assert!(HOOK_BLOCK.contains(MARKER_END));
-        assert!(HOOK_BLOCK.contains("timebomb check"));
+        assert!(HOOK_BLOCK.contains("timebomb sweep"));
     }
 }

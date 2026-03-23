@@ -17,7 +17,7 @@ env:
 jobs:
   fmt:
     name: Rustfmt
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -32,7 +32,7 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -58,7 +58,7 @@ jobs:
 
   unit-tests:
     name: Unit Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -81,7 +81,7 @@ jobs:
 
   integration-tests:
     name: Integration Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -104,7 +104,7 @@ jobs:
 
   smoke-tests:
     name: Smoke Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     needs: [unit-tests, integration-tests, clippy]
     steps:
@@ -165,7 +165,7 @@ jobs:
 
   self-check:
     name: Self Check (timebomb scans itself)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: [smoke-tests]
     # Informational only — fixture files contain deliberately past-dated annotations.
@@ -183,3 +183,17 @@ jobs:
         run: ./target/release/timebomb check ./src --format github || true
       - name: List all annotations sorted by date
         run: ./target/release/timebomb list ./src || true
+
+  release:
+    name: Release
+    runs-on: ubuntu-24.04
+    # Only create releases on pushes to main, not on PRs.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [smoke-tests, self-check]
+    permissions:
+      contents: write       # create tags, GitHub releases, and push Cargo.toml version bumps
+      pull-requests: write  # open and update the release PR
+    steps:
+      - uses: googleapis/release-please-action@a02a34c4d625f9be7cb89156071d8567266a2445 # v4.2.0
+        with:
+          release-type: rust

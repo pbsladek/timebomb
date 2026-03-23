@@ -1,4 +1,4 @@
-use crate::annotation::Annotation;
+use crate::annotation::Fuse;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
@@ -110,10 +110,10 @@ fn parse_blame_porcelain(output: &str) -> HashMap<usize, BlameInfo> {
     map
 }
 
-/// Enrich annotations that have no explicit `[owner]` with the git blame author.
+/// Enrich fuses that have no explicit `[owner]` with the git blame author.
 /// Groups by file so each file gets at most one `git blame` invocation.
-pub fn enrich_with_blame(annotations: &mut [Annotation], repo_root: &Path) {
-    // Collect unique files that have unowned annotations.
+pub fn enrich_with_blame(annotations: &mut [Fuse], repo_root: &Path) {
+    // Collect unique files that have unowned fuses.
     let files_needing_blame: Vec<std::path::PathBuf> = {
         let mut seen = std::collections::HashSet::new();
         annotations
@@ -133,7 +133,7 @@ pub fn enrich_with_blame(annotations: &mut [Annotation], repo_root: &Path) {
         })
         .collect();
 
-    // Enrich annotations.
+    // Enrich fuses.
     for ann in annotations.iter_mut() {
         if ann.owner.is_some() {
             // Has an explicit owner — do not overwrite.
@@ -156,15 +156,15 @@ mod tests {
     use chrono::NaiveDate;
     use std::path::PathBuf;
 
-    fn make_annotation(line: usize, owner: Option<&str>) -> Annotation {
-        Annotation {
+    fn make_annotation(line: usize, owner: Option<&str>) -> Fuse {
+        Fuse {
             file: PathBuf::from("src/foo.rs"),
             line,
             tag: "TODO".to_string(),
             date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
             owner: owner.map(|s| s.to_string()),
             message: "test".to_string(),
-            status: Status::Expired,
+            status: Status::Detonated,
             blamed_owner: None,
         }
     }
@@ -349,17 +349,17 @@ author-mail <bar@example.com>\n\
         let foo_blame = parse_blame_porcelain(porcelain_foo);
         let bar_blame = parse_blame_porcelain(porcelain_bar);
 
-        let mut ann_foo = Annotation {
+        let mut ann_foo = Fuse {
             file: PathBuf::from("src/foo.rs"),
             line: 1,
             tag: "TODO".to_string(),
             date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
             owner: None,
             message: "foo".to_string(),
-            status: Status::Expired,
+            status: Status::Detonated,
             blamed_owner: None,
         };
-        let mut ann_bar = Annotation {
+        let mut ann_bar = Fuse {
             file: PathBuf::from("src/bar.rs"),
             line: 1,
             ..ann_foo.clone()

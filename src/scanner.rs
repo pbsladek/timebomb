@@ -1,4 +1,4 @@
-use crate::annotation::Annotation;
+use crate::annotation::Fuse;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use chrono::NaiveDate;
@@ -11,40 +11,40 @@ use walkdir::WalkDir;
 /// Result of a full scan run.
 #[derive(Debug)]
 pub struct ScanResult {
-    pub annotations: Vec<Annotation>,
-    pub scanned_files: usize,
+    pub fuses: Vec<Fuse>,
+    pub swept_files: usize,
     pub skipped_files: usize,
 }
 
 impl ScanResult {
-    pub fn expired(&self) -> Vec<&Annotation> {
-        self.annotations.iter().filter(|a| a.is_expired()).collect()
+    pub fn detonated(&self) -> Vec<&Fuse> {
+        self.fuses.iter().filter(|a| a.is_detonated()).collect()
     }
 
-    pub fn expiring_soon(&self) -> Vec<&Annotation> {
-        self.annotations
+    pub fn ticking(&self) -> Vec<&Fuse> {
+        self.fuses
             .iter()
-            .filter(|a| a.is_expiring_soon())
+            .filter(|a| a.is_ticking())
             .collect()
     }
 
-    pub fn ok(&self) -> Vec<&Annotation> {
-        self.annotations
+    pub fn inert(&self) -> Vec<&Fuse> {
+        self.fuses
             .iter()
-            .filter(|a| a.status == crate::annotation::Status::Ok)
+            .filter(|a| a.status == crate::annotation::Status::Inert)
             .collect()
     }
 
-    pub fn has_expired(&self) -> bool {
-        self.annotations.iter().any(|a| a.is_expired())
+    pub fn has_detonated(&self) -> bool {
+        self.fuses.iter().any(|a| a.is_detonated())
     }
 
-    pub fn has_expiring_soon(&self) -> bool {
-        self.annotations.iter().any(|a| a.is_expiring_soon())
+    pub fn is_ticking(&self) -> bool {
+        self.fuses.iter().any(|a| a.is_ticking())
     }
 
     pub fn total(&self) -> usize {
-        self.annotations.len()
+        self.fuses.len()
     }
 }
 
@@ -54,7 +54,7 @@ impl ScanResult {
 /// exhaustion from accidentally (or maliciously) large files in the scan tree.
 const MAX_FILE_BYTES: u64 = 100 * 1_024 * 1_024;
 
-/// Core scanner: walks `root`, respects config, and returns all found annotations.
+/// Core scanner: walks `root`, respects config, and returns all found fuses.
 ///
 /// `today` is injected rather than derived internally so that tests can use a
 /// fixed date without depending on the current wall-clock time.
@@ -130,7 +130,7 @@ pub fn scan(root: &Path, config: &Config, today: NaiveDate) -> Result<ScanResult
     // stays free of file I/O.
     // ----------------------------------------------------------------
     let binary_count = AtomicUsize::new(0);
-    let results: Result<Vec<Vec<Annotation>>> = candidates
+    let results: Result<Vec<Vec<Fuse>>> = candidates
         .par_iter()
         .map(|c| {
             let bytes = std::fs::read(&c.abs_path).map_err(|e| Error::Io {
@@ -163,29 +163,29 @@ pub fn scan(root: &Path, config: &Config, today: NaiveDate) -> Result<ScanResult
 
     let binary_skipped = binary_count.load(Ordering::Relaxed);
     skipped_files += binary_skipped;
-    // scanned_files = candidates that passed Phase 1 minus those found binary in Phase 2.
-    let scanned_files = candidates.len() - binary_skipped;
+    // swept_files = candidates that passed Phase 1 minus those found binary in Phase 2.
+    let swept_files = candidates.len() - binary_skipped;
 
     // ----------------------------------------------------------------
-    // Phase 3 (serial): Flatten the per-file annotation lists, then
+    // Phase 3 (serial): Flatten the per-file fuse lists, then
     // sort the combined result by date ascending so the most urgent
     // items appear first.
     // ----------------------------------------------------------------
-    let mut annotations: Vec<Annotation> = results?.into_iter().flatten().collect();
+    let mut fuses: Vec<Fuse> = results?.into_iter().flatten().collect();
     // Unstable sort is faster — NaiveDate is Copy and there is no meaningful
     // tiebreaker for equal dates, so stability adds cost for free.
-    annotations.sort_unstable_by_key(|a| a.date);
+    fuses.sort_unstable_by_key(|a| a.date);
 
     Ok(ScanResult {
-        annotations,
-        scanned_files,
+        fuses,
+        swept_files,
         skipped_files,
     })
 }
 
-/// Scan a single file and return all annotations found.
+/// Scan a single file and return all fuses found.
 ///
-/// `abs_path` is used for reading; `rel_path` is stored in the `Annotation` for display.
+/// `abs_path` is used for reading; `rel_path` is stored in the `Fuse` for display.
 /// Binary files (detected via null-byte check) return an empty vec.
 /// Non-UTF-8 bytes are replaced with U+FFFD — intentional; binary files are
 /// already rejected by the null-byte check.
@@ -195,7 +195,7 @@ pub fn scan_file(
     regex: &Regex,
     config: &Config,
     today: NaiveDate,
-) -> Result<Vec<Annotation>> {
+) -> Result<Vec<Fuse>> {
     let bytes = std::fs::read(abs_path).map_err(|e| Error::Io {
         source: e,
         path: Some(abs_path.to_path_buf()),
@@ -216,18 +216,18 @@ pub fn scan_file(
     scan_content(&content, rel_path, regex, config, today)
 }
 
-/// Scan a string (file content) for annotations. Exposed separately for unit testing.
+/// Scan a string (file content) for fuses. Exposed separately for unit testing.
 pub fn scan_content(
     content: &str,
     rel_path: &Path,
     regex: &Regex,
     config: &Config,
     today: NaiveDate,
-) -> Result<Vec<Annotation>> {
-    let mut annotations = Vec::new();
+) -> Result<Vec<Fuse>> {
+    let mut fuses = Vec::new();
 
     for (line_idx, line) in content.lines().enumerate() {
-        // Fast byte pre-filter: every valid annotation contains '['.
+        // Fast byte pre-filter: every valid fuse contains '['.
         // Skips the regex engine entirely for the vast majority of lines.
         if !line.contains('[') {
             continue;
@@ -257,9 +257,9 @@ pub fn scan_content(
             let owner = caps.get(4).map(|m| m.as_str().trim().to_string());
             let message = caps[5].trim().to_string();
 
-            let status = Annotation::compute_status(date, today, config.warn_within_days);
+            let status = Fuse::compute_status(date, today, config.fuse_days);
 
-            annotations.push(Annotation {
+            fuses.push(Fuse {
                 file: rel_path.to_path_buf(),
                 line: line_number,
                 tag,
@@ -272,12 +272,12 @@ pub fn scan_content(
         }
     }
 
-    Ok(annotations)
+    Ok(fuses)
 }
 
-/// Build the annotation-matching regex from the config's tag list.
+/// Build the fuse-matching regex from the config's trigger list.
 pub fn build_regex(config: &Config) -> Result<Regex> {
-    let pattern = config.annotation_regex_pattern();
+    let pattern = config.fuse_regex_pattern();
     Regex::new(&pattern).map_err(Error::RegexCompile)
 }
 
@@ -308,7 +308,7 @@ pub fn scan_str(
     rel_path: &Path,
     config: &Config,
     today: NaiveDate,
-) -> Result<Vec<Annotation>> {
+) -> Result<Vec<Fuse>> {
     let regex = build_regex(config)?;
     scan_content(content, rel_path, &regex, config, today)
 }
@@ -333,163 +333,163 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_scan_finds_expired_todo() {
+    fn test_scan_finds_detonated_fuse() {
         let src = "// TODO[2020-01-01]: remove this old code\n";
-        let anns = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
-        assert_eq!(anns.len(), 1);
-        assert_eq!(anns[0].tag, "TODO");
-        assert_eq!(anns[0].status, Status::Expired);
-        assert_eq!(anns[0].line, 1);
-        assert_eq!(anns[0].message, "remove this old code");
+        let fuses = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
+        assert_eq!(fuses.len(), 1);
+        assert_eq!(fuses[0].tag, "TODO");
+        assert_eq!(fuses[0].status, Status::Detonated);
+        assert_eq!(fuses[0].line, 1);
+        assert_eq!(fuses[0].message, "remove this old code");
     }
 
     #[test]
     fn test_scan_finds_future_fixme() {
         let src = "# FIXME[2099-01-01]: will still be relevant\n";
-        let anns = scan_str(src, Path::new("foo.py"), &default_config(), today()).unwrap();
-        assert_eq!(anns.len(), 1);
-        assert_eq!(anns[0].tag, "FIXME");
-        assert_eq!(anns[0].status, Status::Ok);
+        let fuses = scan_str(src, Path::new("foo.py"), &default_config(), today()).unwrap();
+        assert_eq!(fuses.len(), 1);
+        assert_eq!(fuses[0].tag, "FIXME");
+        assert_eq!(fuses[0].status, Status::Inert);
     }
 
     #[test]
     fn test_scan_ignores_plain_todo() {
         // Plain TODO without brackets must be ignored
         let src = "// TODO: fix this someday\n// FIXME: also this\n";
-        let anns = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
-        assert!(anns.is_empty(), "plain TODOs must not be matched");
+        let fuses = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
+        assert!(fuses.is_empty(), "plain TODOs must not be matched");
     }
 
     #[test]
     fn test_scan_case_insensitive_tag() {
         let src = "// todo[2020-01-01]: lowercase tag should match\n";
-        let anns = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
-        assert_eq!(anns.len(), 1);
-        assert_eq!(anns[0].tag, "TODO"); // normalised to upper
+        let fuses = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
+        assert_eq!(fuses.len(), 1);
+        assert_eq!(fuses[0].tag, "TODO"); // normalised to upper
     }
 
     #[test]
     fn test_scan_with_owner() {
         let src = "// TODO[2020-01-01][alice]: remove after migration\n";
-        let anns = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
-        assert_eq!(anns.len(), 1);
-        assert_eq!(anns[0].owner, Some("alice".to_string()));
-        assert_eq!(anns[0].message, "remove after migration");
+        let fuses = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
+        assert_eq!(fuses.len(), 1);
+        assert_eq!(fuses[0].owner, Some("alice".to_string()));
+        assert_eq!(fuses[0].message, "remove after migration");
     }
 
     #[test]
     fn test_scan_without_owner() {
         let src = "// TODO[2020-01-01]: no owner here\n";
-        let anns = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
-        assert_eq!(anns[0].owner, None);
+        let fuses = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
+        assert_eq!(fuses[0].owner, None);
     }
 
     #[test]
-    fn test_scan_expiring_soon() {
+    fn test_scan_ticking() {
         // 2025-06-10 is 9 days from today (2025-06-01), within the 14-day window
-        let src = "// TODO[2025-06-10]: expiring soon\n";
+        let src = "// TODO[2025-06-10]: ticking fuse\n";
         let cfg = Config {
-            warn_within_days: 14,
+            fuse_days: 14,
             ..Config::default()
         };
-        let anns = scan_str(src, Path::new("foo.rs"), &cfg, today()).unwrap();
-        assert_eq!(anns[0].status, Status::ExpiringSoon);
+        let fuses = scan_str(src, Path::new("foo.rs"), &cfg, today()).unwrap();
+        assert_eq!(fuses[0].status, Status::Ticking);
     }
 
     #[test]
-    fn test_scan_multiple_annotations() {
+    fn test_scan_multiple_fuses() {
         let src = "\
 line 1
-// TODO[2020-01-01]: expired item
+// TODO[2020-01-01]: detonated item
 line 3
 # FIXME[2099-12-31]: future item
-// HACK[2025-06-08]: expiring soon
+// HACK[2025-06-08]: ticking fuse
 line 6
 ";
         let cfg = Config {
-            warn_within_days: 14,
+            fuse_days: 14,
             ..Config::default()
         };
-        let anns = scan_str(src, Path::new("multi.rs"), &cfg, today()).unwrap();
-        assert_eq!(anns.len(), 3);
+        let fuses = scan_str(src, Path::new("multi.rs"), &cfg, today()).unwrap();
+        assert_eq!(fuses.len(), 3);
         // Find each by tag
-        let expired = anns.iter().find(|a| a.tag == "TODO").unwrap();
-        assert_eq!(expired.status, Status::Expired);
-        assert_eq!(expired.line, 2);
+        let detonated = fuses.iter().find(|a| a.tag == "TODO").unwrap();
+        assert_eq!(detonated.status, Status::Detonated);
+        assert_eq!(detonated.line, 2);
 
-        let future = anns.iter().find(|a| a.tag == "FIXME").unwrap();
-        assert_eq!(future.status, Status::Ok);
+        let future = fuses.iter().find(|a| a.tag == "FIXME").unwrap();
+        assert_eq!(future.status, Status::Inert);
         assert_eq!(future.line, 4);
 
-        let soon = anns.iter().find(|a| a.tag == "HACK").unwrap();
-        assert_eq!(soon.status, Status::ExpiringSoon);
+        let soon = fuses.iter().find(|a| a.tag == "HACK").unwrap();
+        assert_eq!(soon.status, Status::Ticking);
         assert_eq!(soon.line, 5);
     }
 
     #[test]
     fn test_scan_invalid_date_skipped_with_warning() {
-        // Invalid date — should not produce an annotation (warning printed to stderr)
+        // Invalid date — should not produce a fuse (warning printed to stderr)
         let src = "// TODO[2026-13-45]: invalid date month\n";
-        let anns = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
-        assert!(anns.is_empty());
+        let fuses = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
+        assert!(fuses.is_empty());
     }
 
     #[test]
     fn test_scan_sql_comment() {
         let src = "-- TODO[2020-01-01]: drop this column\n";
-        let anns = scan_str(src, Path::new("schema.sql"), &default_config(), today()).unwrap();
-        assert_eq!(anns.len(), 1);
-        assert_eq!(anns[0].message, "drop this column");
+        let fuses = scan_str(src, Path::new("schema.sql"), &default_config(), today()).unwrap();
+        assert_eq!(fuses.len(), 1);
+        assert_eq!(fuses[0].message, "drop this column");
     }
 
     #[test]
     fn test_scan_hash_comment() {
         let src = "# REMOVEME[2020-01-01]: remove this block\n";
-        let anns = scan_str(src, Path::new("script.py"), &default_config(), today()).unwrap();
-        assert_eq!(anns.len(), 1);
-        assert_eq!(anns[0].tag, "REMOVEME");
+        let fuses = scan_str(src, Path::new("script.py"), &default_config(), today()).unwrap();
+        assert_eq!(fuses.len(), 1);
+        assert_eq!(fuses[0].tag, "REMOVEME");
     }
 
     #[test]
     fn test_scan_temp_tag() {
         let src = "// TEMP[2020-01-01]: temporary workaround\n";
-        let anns = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
-        assert_eq!(anns.len(), 1);
-        assert_eq!(anns[0].tag, "TEMP");
+        let fuses = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
+        assert_eq!(fuses.len(), 1);
+        assert_eq!(fuses[0].tag, "TEMP");
     }
 
     #[test]
-    fn test_scan_custom_tags_only() {
+    fn test_scan_custom_triggers_only() {
         let src = "\
 // TODO[2020-01-01]: this should not match
 // CUSTOM[2020-01-01]: this should match
 ";
         let cfg = Config {
-            tags: vec!["CUSTOM".to_string()],
+            triggers: vec!["CUSTOM".to_string()],
             ..Config::default()
         };
         // Rebuild is implicit via scan_str which calls build_regex
-        let anns = scan_str(src, Path::new("foo.rs"), &cfg, today()).unwrap();
-        assert_eq!(anns.len(), 1);
-        assert_eq!(anns[0].tag, "CUSTOM");
+        let fuses = scan_str(src, Path::new("foo.rs"), &cfg, today()).unwrap();
+        assert_eq!(fuses.len(), 1);
+        assert_eq!(fuses[0].tag, "CUSTOM");
     }
 
     #[test]
     fn test_scan_empty_file() {
-        let anns = scan_str("", Path::new("empty.rs"), &default_config(), today()).unwrap();
-        assert!(anns.is_empty());
+        let fuses = scan_str("", Path::new("empty.rs"), &default_config(), today()).unwrap();
+        assert!(fuses.is_empty());
     }
 
     #[test]
-    fn test_scan_annotation_exactly_at_zero_days_remaining() {
-        // Same day as today, no warn window → ExpiringSoon (0 <= 0)
+    fn test_scan_fuse_exactly_at_zero_days_remaining() {
+        // Same day as today, no fuse window → Ticking (0 <= 0)
         let src = "// TODO[2025-06-01]: due today\n";
         let cfg = Config {
-            warn_within_days: 0,
+            fuse_days: 0,
             ..Config::default()
         };
-        let anns = scan_str(src, Path::new("foo.rs"), &cfg, today()).unwrap();
-        assert_eq!(anns[0].status, Status::ExpiringSoon);
+        let fuses = scan_str(src, Path::new("foo.rs"), &cfg, today()).unwrap();
+        assert_eq!(fuses[0].status, Status::Ticking);
     }
 
     // -----------------------------------------------------------------------
@@ -519,47 +519,47 @@ line 6
     #[test]
     fn test_scan_result_categorisation() {
         let today_date = today();
-        let expired = Annotation {
+        let detonated = Fuse {
             file: PathBuf::from("a.rs"),
             line: 1,
             tag: "TODO".to_string(),
             date: NaiveDate::parse_from_str("2020-01-01", "%Y-%m-%d").unwrap(),
             owner: None,
-            message: "expired".to_string(),
-            status: Status::Expired,
+            message: "detonated".to_string(),
+            status: Status::Detonated,
             blamed_owner: None,
         };
-        let soon = Annotation {
+        let soon = Fuse {
             file: PathBuf::from("b.rs"),
             line: 2,
             tag: "FIXME".to_string(),
             date: NaiveDate::parse_from_str("2025-06-08", "%Y-%m-%d").unwrap(),
             owner: None,
-            message: "soon".to_string(),
-            status: Status::ExpiringSoon,
+            message: "ticking".to_string(),
+            status: Status::Ticking,
             blamed_owner: None,
         };
-        let ok = Annotation {
+        let inert = Fuse {
             file: PathBuf::from("c.rs"),
             line: 3,
             tag: "HACK".to_string(),
             date: NaiveDate::parse_from_str("2099-01-01", "%Y-%m-%d").unwrap(),
             owner: None,
             message: "fine".to_string(),
-            status: Status::Ok,
+            status: Status::Inert,
             blamed_owner: None,
         };
         let _ = today_date; // used in test context, suppress warning
         let result = ScanResult {
-            annotations: vec![expired, soon, ok],
-            scanned_files: 3,
+            fuses: vec![detonated, soon, inert],
+            swept_files: 3,
             skipped_files: 0,
         };
-        assert_eq!(result.expired().len(), 1);
-        assert_eq!(result.expiring_soon().len(), 1);
-        assert_eq!(result.ok().len(), 1);
-        assert!(result.has_expired());
-        assert!(result.has_expiring_soon());
+        assert_eq!(result.detonated().len(), 1);
+        assert_eq!(result.ticking().len(), 1);
+        assert_eq!(result.inert().len(), 1);
+        assert!(result.has_detonated());
+        assert!(result.is_ticking());
         assert_eq!(result.total(), 3);
     }
 
@@ -573,13 +573,13 @@ line 6
         let dir = tempfile::tempdir().unwrap();
 
         let mut f1 = std::fs::File::create(dir.path().join("main.rs")).unwrap();
-        writeln!(f1, "// TODO[2020-01-01]: expired").unwrap();
+        writeln!(f1, "// TODO[2020-01-01]: detonated").unwrap();
         writeln!(f1, "// FIXME[2099-01-01]: future").unwrap();
 
         let result = scan(dir.path(), &default_config(), today()).unwrap();
-        assert_eq!(result.scanned_files, 1);
-        assert_eq!(result.annotations.len(), 2);
-        assert!(result.has_expired());
+        assert_eq!(result.swept_files, 1);
+        assert_eq!(result.fuses.len(), 2);
+        assert!(result.has_detonated());
     }
 
     #[test]
@@ -594,12 +594,12 @@ line 6
 
         // And a normal file
         let mut f2 = std::fs::File::create(dir.path().join("lib.rs")).unwrap();
-        writeln!(f2, "// FIXME[2099-01-01]: ok").unwrap();
+        writeln!(f2, "// FIXME[2099-01-01]: inert").unwrap();
 
         let result = scan(dir.path(), &default_config(), today()).unwrap();
         // Only lib.rs should be scanned; the .git file should be excluded
-        assert_eq!(result.scanned_files, 1);
-        let tags: Vec<_> = result.annotations.iter().map(|a| a.tag.as_str()).collect();
+        assert_eq!(result.swept_files, 1);
+        let tags: Vec<_> = result.fuses.iter().map(|a| a.tag.as_str()).collect();
         assert!(!tags.contains(&"TODO"));
         assert!(tags.contains(&"FIXME"));
     }
@@ -614,24 +614,24 @@ line 6
         writeln!(f, "// TODO[2020-01-01]: should be skipped").unwrap();
 
         let result = scan(dir.path(), &default_config(), today()).unwrap();
-        assert_eq!(result.scanned_files, 0);
-        assert!(result.annotations.is_empty());
+        assert_eq!(result.swept_files, 0);
+        assert!(result.fuses.is_empty());
     }
 
     #[test]
     fn test_scan_sorted_by_date_ascending() {
         let src = "\
 // TODO[2099-12-31]: far future
-// FIXME[2020-01-01]: expired
+// FIXME[2020-01-01]: detonated
 // HACK[2050-06-15]: mid future
 ";
-        let anns = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
+        let fuses = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
         // scan_str doesn't sort; the full scan() call does. Test scan() sorting via a temp dir.
         // (scan_str is not sorted — only scan() sorts)
         // Verify that each item appears in the right order from the lines themselves:
-        assert_eq!(anns[0].tag, "TODO");
-        assert_eq!(anns[1].tag, "FIXME");
-        assert_eq!(anns[2].tag, "HACK");
+        assert_eq!(fuses[0].tag, "TODO");
+        assert_eq!(fuses[1].tag, "FIXME");
+        assert_eq!(fuses[2].tag, "HACK");
     }
 
     #[test]
@@ -640,11 +640,11 @@ line 6
         let dir = tempfile::tempdir().unwrap();
         let mut f = std::fs::File::create(dir.path().join("sort.rs")).unwrap();
         writeln!(f, "// TODO[2099-12-31]: far future").unwrap();
-        writeln!(f, "// FIXME[2020-01-01]: expired").unwrap();
+        writeln!(f, "// FIXME[2020-01-01]: detonated").unwrap();
         writeln!(f, "// HACK[2050-06-15]: mid future").unwrap();
 
         let result = scan(dir.path(), &default_config(), today()).unwrap();
-        let dates: Vec<_> = result.annotations.iter().map(|a| a.date).collect();
+        let dates: Vec<_> = result.fuses.iter().map(|a| a.date).collect();
         let mut sorted = dates.clone();
         sorted.sort();
         assert_eq!(

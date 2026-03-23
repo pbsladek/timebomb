@@ -9,11 +9,11 @@ use std::path::Path;
 pub struct ConfigFile {
     /// Tags to scan for.
     #[serde(default)]
-    pub tags: Option<Vec<String>>,
+    pub triggers: Option<Vec<String>>,
 
-    /// Warn (and optionally fail) if an annotation expires within this many days.
+    /// Warn (and optionally fail) if a fuse expires within this many days.
     #[serde(default)]
-    pub warn_within_days: Option<u32>,
+    pub fuse_days: Option<u32>,
 
     /// Glob patterns to exclude from scanning.
     #[serde(default)]
@@ -23,55 +23,60 @@ pub struct ConfigFile {
     #[serde(default)]
     pub extensions: Option<Vec<String>>,
 
-    /// Ratchet: fail if the number of expired annotations exceeds this limit.
+    /// Ratchet: fail if the number of detonated fuses exceeds this limit.
     #[serde(default)]
-    pub max_expired: Option<usize>,
+    pub max_detonated: Option<usize>,
 
-    /// Ratchet: fail if the number of expiring-soon annotations exceeds this limit.
+    /// Ratchet: fail if the number of ticking fuses exceeds this limit.
     #[serde(default)]
-    pub max_expiring_soon: Option<usize>,
+    pub max_ticking: Option<usize>,
 }
 
 /// Fully-resolved configuration after merging the config file with CLI overrides.
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub tags: Vec<String>,
-    pub warn_within_days: u32,
+    pub triggers: Vec<String>,
+    pub fuse_days: u32,
     pub exclude_patterns: Vec<String>,
     pub extensions: Vec<String>,
-    /// Whether to fail (exit 1) when warn-threshold items are found (--fail-on-warn).
-    pub fail_on_warn: bool,
+    /// Whether to fail (exit 1) when ticking items are found (--fail-on-ticking).
+    pub fail_on_ticking: bool,
     /// If Some, only scan files whose relative path is in this set (--since git-diff mode).
     /// None means scan all files (normal mode).
     pub diff_files: Option<std::collections::HashSet<std::path::PathBuf>>,
-    /// Ratchet: fail if the number of expired annotations exceeds this limit.
-    pub max_expired: Option<usize>,
-    /// Ratchet: fail if the number of expiring-soon annotations exceeds this limit.
-    pub max_expiring_soon: Option<usize>,
+    /// Ratchet: fail if the number of detonated fuses exceeds this limit.
+    pub max_detonated: Option<usize>,
+    /// Ratchet: fail if the number of ticking fuses exceeds this limit.
+    pub max_ticking: Option<usize>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
-            tags: default_tags(),
-            warn_within_days: 0,
+            triggers: default_triggers(),
+            fuse_days: 0,
             exclude_patterns: default_excludes(),
             extensions: default_extensions(),
-            fail_on_warn: false,
+            fail_on_ticking: false,
             diff_files: None,
-            max_expired: None,
-            max_expiring_soon: None,
+            max_detonated: None,
+            max_ticking: None,
         }
     }
 }
 
-fn default_tags() -> Vec<String> {
+fn default_triggers() -> Vec<String> {
     vec![
         "TODO".to_string(),
         "FIXME".to_string(),
         "HACK".to_string(),
         "TEMP".to_string(),
         "REMOVEME".to_string(),
+        "DEBT".to_string(),
+        "STOPSHIP".to_string(),
+        "WORKAROUND".to_string(),
+        "DEPRECATED".to_string(),
+        "BUG".to_string(),
     ]
 }
 
@@ -109,6 +114,7 @@ fn default_extensions() -> Vec<String> {
         "ml".to_string(),
         "lua".to_string(),
         "dart".to_string(),
+        "kt".to_string(),
         "sql".to_string(),
         "tf".to_string(),
         "yaml".to_string(),
@@ -119,17 +125,17 @@ fn default_extensions() -> Vec<String> {
 /// CLI-level overrides that can be applied on top of a `Config`.
 #[derive(Debug, Default, Clone)]
 pub struct CliOverrides {
-    /// `--warn-within 30d`
-    pub warn_within: Option<String>,
-    /// `--fail-on-warn`
-    pub fail_on_warn: bool,
+    /// `--fuse 30d`
+    pub fuse: Option<String>,
+    /// `--fail-on-ticking`
+    pub fail_on_ticking: bool,
 }
 
 impl CliOverrides {
-    pub fn new(warn_within: Option<String>, fail_on_warn: bool) -> Self {
+    pub fn new(fuse: Option<String>, fail_on_ticking: bool) -> Self {
         CliOverrides {
-            warn_within,
-            fail_on_warn,
+            fuse,
+            fail_on_ticking,
         }
     }
 }
@@ -166,15 +172,15 @@ fn read_config_file(path: &Path) -> Result<ConfigFile> {
 fn merge_config(file_cfg: Option<ConfigFile>, overrides: &CliOverrides) -> Result<Config> {
     let defaults = Config::default();
 
-    let tags = file_cfg
+    let triggers = file_cfg
         .as_ref()
-        .and_then(|c| c.tags.clone())
-        .unwrap_or(defaults.tags);
+        .and_then(|c| c.triggers.clone())
+        .unwrap_or(defaults.triggers);
 
-    let mut warn_within_days = file_cfg
+    let mut fuse_days = file_cfg
         .as_ref()
-        .and_then(|c| c.warn_within_days)
-        .unwrap_or(defaults.warn_within_days);
+        .and_then(|c| c.fuse_days)
+        .unwrap_or(defaults.fuse_days);
 
     let exclude_patterns = file_cfg
         .as_ref()
@@ -186,23 +192,23 @@ fn merge_config(file_cfg: Option<ConfigFile>, overrides: &CliOverrides) -> Resul
         .and_then(|c| c.extensions.clone())
         .unwrap_or(defaults.extensions);
 
-    let max_expired = file_cfg.as_ref().and_then(|c| c.max_expired);
-    let max_expiring_soon = file_cfg.as_ref().and_then(|c| c.max_expiring_soon);
+    let max_detonated = file_cfg.as_ref().and_then(|c| c.max_detonated);
+    let max_ticking = file_cfg.as_ref().and_then(|c| c.max_ticking);
 
     // Apply CLI overrides
-    if let Some(ref w) = overrides.warn_within {
-        warn_within_days = parse_duration_days(w)?;
+    if let Some(ref w) = overrides.fuse {
+        fuse_days = parse_duration_days(w)?;
     }
 
     Ok(Config {
-        tags,
-        warn_within_days,
+        triggers,
+        fuse_days,
         exclude_patterns,
         extensions,
-        fail_on_warn: overrides.fail_on_warn,
+        fail_on_ticking: overrides.fail_on_ticking,
         diff_files: None,
-        max_expired,
-        max_expiring_soon,
+        max_detonated,
+        max_ticking,
     })
 }
 
@@ -254,12 +260,12 @@ impl Config {
         }
     }
 
-    /// Build the annotation regex pattern from the configured tags.
-    pub fn annotation_regex_pattern(&self) -> String {
-        let tags_alternation = self.tags.join("|");
+    /// Build the fuse regex pattern from the configured triggers.
+    pub fn fuse_regex_pattern(&self) -> String {
+        let triggers_alternation = self.triggers.join("|");
         format!(
             r"(?i)({tags})\[(\d{{4}}-\d{{2}}-\d{{2}})\](\[([^\]]+)\])?:\s*(.+)",
-            tags = tags_alternation
+            tags = triggers_alternation
         )
     }
 }
@@ -279,65 +285,65 @@ mod tests {
     #[test]
     fn test_default_config() {
         let cfg = Config::default();
-        assert!(cfg.tags.contains(&"TODO".to_string()));
-        assert!(cfg.tags.contains(&"FIXME".to_string()));
-        assert_eq!(cfg.warn_within_days, 0);
+        assert!(cfg.triggers.contains(&"TODO".to_string()));
+        assert!(cfg.triggers.contains(&"FIXME".to_string()));
+        assert_eq!(cfg.fuse_days, 0);
         assert!(!cfg.extensions.is_empty());
-        assert!(!cfg.fail_on_warn);
+        assert!(!cfg.fail_on_ticking);
     }
 
     #[test]
     fn test_merge_no_file_no_overrides() {
         let cfg = merge_config(None, &CliOverrides::default()).unwrap();
-        assert_eq!(cfg.tags, default_tags());
-        assert_eq!(cfg.warn_within_days, 0);
+        assert_eq!(cfg.triggers, default_triggers());
+        assert_eq!(cfg.fuse_days, 0);
     }
 
     #[test]
-    fn test_merge_file_overrides_tags() {
+    fn test_merge_file_overrides_triggers() {
         let file_cfg = ConfigFile {
-            tags: Some(vec!["TODO".to_string(), "FIXME".to_string()]),
-            warn_within_days: Some(7),
+            triggers: Some(vec!["TODO".to_string(), "FIXME".to_string()]),
+            fuse_days: Some(7),
             exclude: None,
             extensions: None,
-            max_expired: None,
-            max_expiring_soon: None,
+            max_detonated: None,
+            max_ticking: None,
         };
         let cfg = merge_config(Some(file_cfg), &CliOverrides::default()).unwrap();
-        assert_eq!(cfg.tags, vec!["TODO", "FIXME"]);
-        assert_eq!(cfg.warn_within_days, 7);
+        assert_eq!(cfg.triggers, vec!["TODO", "FIXME"]);
+        assert_eq!(cfg.fuse_days, 7);
         // Extensions should fall back to defaults
         assert!(cfg.extensions.contains(&"rs".to_string()));
     }
 
     #[test]
-    fn test_cli_override_warn_within() {
+    fn test_cli_override_fuse() {
         let overrides = CliOverrides::new(Some("30d".to_string()), false);
         let cfg = merge_config(None, &overrides).unwrap();
-        assert_eq!(cfg.warn_within_days, 30);
+        assert_eq!(cfg.fuse_days, 30);
     }
 
     #[test]
-    fn test_cli_override_fail_on_warn() {
+    fn test_cli_override_fail_on_ticking() {
         let overrides = CliOverrides::new(None, true);
         let cfg = merge_config(None, &overrides).unwrap();
-        assert!(cfg.fail_on_warn);
+        assert!(cfg.fail_on_ticking);
     }
 
     #[test]
-    fn test_cli_warn_within_overrides_file() {
+    fn test_cli_fuse_overrides_file() {
         let file_cfg = ConfigFile {
-            tags: None,
-            warn_within_days: Some(7),
+            triggers: None,
+            fuse_days: Some(7),
             exclude: None,
             extensions: None,
-            max_expired: None,
-            max_expiring_soon: None,
+            max_detonated: None,
+            max_ticking: None,
         };
         let overrides = CliOverrides::new(Some("30d".to_string()), false);
         let cfg = merge_config(Some(file_cfg), &overrides).unwrap();
         // CLI should win
-        assert_eq!(cfg.warn_within_days, 30);
+        assert_eq!(cfg.fuse_days, 30);
     }
 
     #[test]
@@ -394,28 +400,33 @@ mod tests {
     }
 
     #[test]
-    fn test_annotation_regex_pattern_contains_tags() {
+    fn test_fuse_regex_pattern_contains_triggers() {
         let cfg = Config::default();
-        let pattern = cfg.annotation_regex_pattern();
+        let pattern = cfg.fuse_regex_pattern();
         assert!(pattern.contains("TODO"));
         assert!(pattern.contains("FIXME"));
         assert!(pattern.contains("HACK"));
         assert!(pattern.contains("TEMP"));
         assert!(pattern.contains("REMOVEME"));
+        assert!(pattern.contains("DEBT"));
+        assert!(pattern.contains("STOPSHIP"));
+        assert!(pattern.contains("WORKAROUND"));
+        assert!(pattern.contains("DEPRECATED"));
+        assert!(pattern.contains("BUG"));
     }
 
     #[test]
     fn test_read_config_file_valid() {
         let toml_content = r#"
-tags = ["TODO", "FIXME"]
-warn_within_days = 14
+triggers = ["TODO", "FIXME"]
+fuse_days = 14
 exclude = ["vendor/**"]
 extensions = ["rs", "go"]
 "#;
         let f = write_toml(toml_content);
         let cfg_file = read_config_file(f.path()).unwrap();
-        assert_eq!(cfg_file.tags.unwrap(), vec!["TODO", "FIXME"]);
-        assert_eq!(cfg_file.warn_within_days.unwrap(), 14);
+        assert_eq!(cfg_file.triggers.unwrap(), vec!["TODO", "FIXME"]);
+        assert_eq!(cfg_file.fuse_days.unwrap(), 14);
         assert_eq!(cfg_file.exclude.unwrap(), vec!["vendor/**"]);
         assert_eq!(cfg_file.extensions.unwrap(), vec!["rs", "go"]);
     }
@@ -424,8 +435,8 @@ extensions = ["rs", "go"]
     fn test_read_config_file_empty() {
         let f = write_toml("");
         let cfg_file = read_config_file(f.path()).unwrap();
-        assert!(cfg_file.tags.is_none());
-        assert!(cfg_file.warn_within_days.is_none());
+        assert!(cfg_file.triggers.is_none());
+        assert!(cfg_file.fuse_days.is_none());
     }
 
     #[test]

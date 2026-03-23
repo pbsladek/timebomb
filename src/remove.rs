@@ -138,22 +138,22 @@ pub fn run_remove_all_expired(
 ) -> Result<i32> {
     // 1. Scan for expired annotations ----------------------------------------
     let result = scan(scan_path, cfg, today)?;
-    let expired: Vec<_> = result.expired();
+    let detonated: Vec<_> = result.detonated();
 
-    if expired.is_empty() {
-        println!("No expired annotations found.");
+    if detonated.is_empty() {
+        println!("No detonated fuses found.");
         return Ok(0);
     }
 
-    // 2. Print all annotations that will be removed --------------------------
-    println!("Annotations to remove:");
-    for ann in &expired {
+    // 2. Print all fuses that will be removed --------------------------------
+    println!("Fuses to remove:");
+    for ann in &detonated {
         println!("  - {}:{}  {}", ann.file.display(), ann.line, ann.message);
     }
 
     // 3. Prompt for confirmation (unless --yes) ------------------------------
     if !yes {
-        print!("Remove {} annotation(s)? [y/N]: ", expired.len());
+        print!("Remove {} fuse(s)? [y/N]: ", detonated.len());
         io::stdout().flush().map_err(|e| Error::Io {
             source: e,
             path: None,
@@ -173,9 +173,9 @@ pub fn run_remove_all_expired(
     }
 
     // 4. Group by file, sort lines descending within each file ---------------
-    // The annotation file paths are relative to scan_path, so resolve them.
+    // The fuse file paths are relative to scan_path, so resolve them.
     let mut by_file: HashMap<PathBuf, Vec<usize>> = HashMap::new();
-    for ann in &expired {
+    for ann in &detonated {
         let abs_path = scan_path.join(&ann.file);
         by_file.entry(abs_path).or_default().push(ann.line);
     }

@@ -1,4 +1,4 @@
-use crate::annotation::{Annotation, Status};
+use crate::annotation::{Fuse, Status};
 use crate::scanner::ScanResult;
 use colored::Colorize;
 use serde::Serialize;
@@ -46,40 +46,40 @@ fn color_enabled() -> bool {
 // ─── Terminal formatter ───────────────────────────────────────────────────────
 
 /// Print a `ScanResult` to stdout using the terminal (colored) format.
-pub fn print_terminal(result: &ScanResult, warn_within_days: u32, show_ok: bool) {
+pub fn print_terminal(result: &ScanResult, fuse_days: u32, show_ok: bool) {
     let use_color = color_enabled();
 
-    for ann in &result.annotations {
-        print_annotation_terminal(ann, warn_within_days, use_color, show_ok);
+    for fuse in &result.fuses {
+        print_fuse_terminal(fuse, fuse_days, use_color, show_ok);
     }
 
     // Summary line — single pass to avoid three Vec allocations just for counts.
-    let (expired_count, soon_count, ok_count) =
+    let (detonated_count, ticking_count, inert_count) =
         result
-            .annotations
+            .fuses
             .iter()
-            .fold((0usize, 0usize, 0usize), |(e, w, o), ann| {
-                match ann.status {
-                    Status::Expired => (e + 1, w, o),
-                    Status::ExpiringSoon => (e, w + 1, o),
-                    Status::Ok => (e, w, o + 1),
+            .fold((0usize, 0usize, 0usize), |(d, t, i), fuse| {
+                match fuse.status {
+                    Status::Detonated => (d + 1, t, i),
+                    Status::Ticking => (d, t + 1, i),
+                    Status::Inert => (d, t, i + 1),
                 }
             });
 
     println!();
     let summary = format!(
-        "Scanned {} file(s) · {} annotation(s) total · {} expired · {} expiring soon · {} ok",
-        result.scanned_files,
+        "Swept {} file(s) · {} fuse(s) total · {} detonated · {} ticking · {} inert",
+        result.swept_files,
         result.total(),
-        expired_count,
-        soon_count,
-        ok_count,
+        detonated_count,
+        ticking_count,
+        inert_count,
     );
 
     if use_color {
-        if expired_count > 0 {
+        if detonated_count > 0 {
             eprintln!("{}", summary.red().bold());
-        } else if soon_count > 0 {
+        } else if ticking_count > 0 {
             eprintln!("{}", summary.yellow());
         } else {
             eprintln!("{}", summary.green());
@@ -90,49 +90,49 @@ pub fn print_terminal(result: &ScanResult, warn_within_days: u32, show_ok: bool)
 }
 
 /// Format the owner column: `[owner]` if explicit, `[~blame]` if inferred, empty otherwise.
-fn owner_display(ann: &Annotation) -> String {
-    if let Some(o) = &ann.owner {
+fn owner_display(fuse: &Fuse) -> String {
+    if let Some(o) = &fuse.owner {
         format!(" [{}]", o)
-    } else if let Some(b) = &ann.blamed_owner {
+    } else if let Some(b) = &fuse.blamed_owner {
         format!(" [~{}]", b)
     } else {
         String::new()
     }
 }
 
-fn print_annotation_terminal(
-    ann: &Annotation,
-    _warn_within_days: u32,
+fn print_fuse_terminal(
+    fuse: &Fuse,
+    _fuse_days: u32,
     use_color: bool,
     show_ok: bool,
 ) {
-    // Skip OK items unless explicitly requested
-    if ann.status == Status::Ok && !show_ok {
+    // Skip inert items unless explicitly requested
+    if fuse.status == Status::Inert && !show_ok {
         // Still show them in list mode
     }
 
-    let status_label = match ann.status {
-        Status::Expired => "EXPIRED ",
-        Status::ExpiringSoon => "WARNING ",
-        Status::Ok => "OK      ",
+    let status_label = match fuse.status {
+        Status::Detonated => "DETONATED",
+        Status::Ticking => "TICKING  ",
+        Status::Inert => "INERT    ",
     };
 
-    let location = format!("{:<40}", ann.location());
-    let tag_date = format!("{}[{}]", ann.tag, ann.date_str());
+    let location = format!("{:<40}", fuse.location());
+    let tag_date = format!("{}[{}]", fuse.tag, fuse.date_str());
     let tag_date_col = format!("{:<20}", tag_date);
 
-    let owner_part = owner_display(ann);
+    let owner_part = owner_display(fuse);
 
     let line = format!(
         "{} {}  {}{}  {}",
-        status_label, location, tag_date_col, owner_part, ann.message
+        status_label, location, tag_date_col, owner_part, fuse.message
     );
 
     if use_color {
-        let colored_line = match ann.status {
-            Status::Expired => line.red().bold().to_string(),
-            Status::ExpiringSoon => line.yellow().to_string(),
-            Status::Ok => line.dimmed().to_string(),
+        let colored_line = match fuse.status {
+            Status::Detonated => line.red().bold().to_string(),
+            Status::Ticking => line.yellow().to_string(),
+            Status::Inert => line.dimmed().to_string(),
         };
         println!("{}", colored_line);
     } else {
@@ -140,30 +140,30 @@ fn print_annotation_terminal(
     }
 }
 
-/// Print a single annotation in terminal format (used by `list` subcommand).
-pub fn print_annotation_line_terminal(ann: &Annotation, use_color: bool) {
-    let status_label = match ann.status {
-        Status::Expired => "EXPIRED ",
-        Status::ExpiringSoon => "WARNING ",
-        Status::Ok => "OK      ",
+/// Print a single fuse in terminal format (used by `manifest` subcommand).
+pub fn print_fuse_line_terminal(fuse: &Fuse, use_color: bool) {
+    let status_label = match fuse.status {
+        Status::Detonated => "DETONATED",
+        Status::Ticking => "TICKING  ",
+        Status::Inert => "INERT    ",
     };
 
-    let location = format!("{:<40}", ann.location());
-    let tag_date = format!("{}[{}]", ann.tag, ann.date_str());
+    let location = format!("{:<40}", fuse.location());
+    let tag_date = format!("{}[{}]", fuse.tag, fuse.date_str());
     let tag_date_col = format!("{:<20}", tag_date);
 
-    let owner_part = owner_display(ann);
+    let owner_part = owner_display(fuse);
 
     let line = format!(
         "{} {}  {}{}  {}",
-        status_label, location, tag_date_col, owner_part, ann.message
+        status_label, location, tag_date_col, owner_part, fuse.message
     );
 
     if use_color {
-        let colored_line = match ann.status {
-            Status::Expired => line.red().bold().to_string(),
-            Status::ExpiringSoon => line.yellow().to_string(),
-            Status::Ok => line.dimmed().to_string(),
+        let colored_line = match fuse.status {
+            Status::Detonated => line.red().bold().to_string(),
+            Status::Ticking => line.yellow().to_string(),
+            Status::Inert => line.dimmed().to_string(),
         };
         println!("{}", colored_line);
     } else {
@@ -176,16 +176,16 @@ pub fn print_annotation_line_terminal(ann: &Annotation, use_color: bool) {
 /// Serializable wrapper for the full JSON output.
 #[derive(Debug, Serialize)]
 pub struct JsonOutput<'a> {
-    pub scanned_files: usize,
-    pub total_annotations: usize,
-    pub expired: Vec<JsonAnnotation<'a>>,
-    pub expiring_soon: Vec<JsonAnnotation<'a>>,
-    pub ok: Vec<JsonAnnotation<'a>>,
+    pub swept_files: usize,
+    pub total_fuses: usize,
+    pub detonated: Vec<JsonFuse<'a>>,
+    pub ticking: Vec<JsonFuse<'a>>,
+    pub inert: Vec<JsonFuse<'a>>,
 }
 
-/// A single annotation serialized for JSON output.
+/// A single fuse serialized for JSON output.
 #[derive(Debug, Serialize)]
-pub struct JsonAnnotation<'a> {
+pub struct JsonFuse<'a> {
     pub file: String,
     pub line: usize,
     pub tag: &'a str,
@@ -197,47 +197,47 @@ pub struct JsonAnnotation<'a> {
     pub status: &'a str,
 }
 
-impl<'a> JsonAnnotation<'a> {
-    fn from_annotation(ann: &'a Annotation) -> Self {
-        JsonAnnotation {
-            file: ann.file.display().to_string(),
-            line: ann.line,
-            tag: &ann.tag,
-            date: ann.date_str(),
-            owner: ann.owner.as_deref(),
-            blamed_owner: ann.blamed_owner.as_deref(),
-            message: &ann.message,
-            status: ann.status.as_str(),
+impl<'a> JsonFuse<'a> {
+    fn from_fuse(fuse: &'a Fuse) -> Self {
+        JsonFuse {
+            file: fuse.file.display().to_string(),
+            line: fuse.line,
+            tag: &fuse.tag,
+            date: fuse.date_str(),
+            owner: fuse.owner.as_deref(),
+            blamed_owner: fuse.blamed_owner.as_deref(),
+            message: &fuse.message,
+            status: fuse.status.as_str(),
         }
     }
 }
 
 /// Print the full scan result as JSON to stdout.
 pub fn print_json(result: &ScanResult) {
-    let expired: Vec<JsonAnnotation> = result
-        .expired()
+    let detonated: Vec<JsonFuse> = result
+        .detonated()
         .iter()
-        .map(|a| JsonAnnotation::from_annotation(a))
+        .map(|f| JsonFuse::from_fuse(f))
         .collect();
 
-    let expiring_soon: Vec<JsonAnnotation> = result
-        .expiring_soon()
+    let ticking: Vec<JsonFuse> = result
+        .ticking()
         .iter()
-        .map(|a| JsonAnnotation::from_annotation(a))
+        .map(|f| JsonFuse::from_fuse(f))
         .collect();
 
-    let ok: Vec<JsonAnnotation> = result
-        .ok()
+    let inert: Vec<JsonFuse> = result
+        .inert()
         .iter()
-        .map(|a| JsonAnnotation::from_annotation(a))
+        .map(|f| JsonFuse::from_fuse(f))
         .collect();
 
     let output = JsonOutput {
-        scanned_files: result.scanned_files,
-        total_annotations: result.total(),
-        expired,
-        expiring_soon,
-        ok,
+        swept_files: result.swept_files,
+        total_fuses: result.total(),
+        detonated,
+        ticking,
+        inert,
     };
 
     match serde_json::to_string_pretty(&output) {
@@ -246,11 +246,11 @@ pub fn print_json(result: &ScanResult) {
     }
 }
 
-/// Serialize a slice of annotations as a JSON array (used by `list --format json`).
-pub fn print_json_list(annotations: &[&Annotation]) {
-    let items: Vec<JsonAnnotation> = annotations
+/// Serialize a slice of fuses as a JSON array (used by `manifest --format json`).
+pub fn print_json_list(fuses: &[&Fuse]) {
+    let items: Vec<JsonFuse> = fuses
         .iter()
-        .map(|a| JsonAnnotation::from_annotation(a))
+        .map(|f| JsonFuse::from_fuse(f))
         .collect();
 
     match serde_json::to_string_pretty(&items) {
@@ -261,79 +261,79 @@ pub fn print_json_list(annotations: &[&Annotation]) {
 
 // ─── GitHub Actions formatter ─────────────────────────────────────────────────
 
-/// Print annotations in GitHub Actions workflow command format.
+/// Print fuses in GitHub Actions workflow command format.
 ///
-/// Expired → `::error`
-/// Expiring soon → `::warning`
-/// Ok → silently skipped
-pub fn print_github(result: &ScanResult, warn_within_days: u32) {
-    for ann in &result.annotations {
-        print_annotation_github(ann, warn_within_days);
+/// Detonated → `::error`
+/// Ticking → `::warning`
+/// Inert → silently skipped
+pub fn print_github(result: &ScanResult, fuse_days: u32) {
+    for fuse in &result.fuses {
+        print_fuse_github(fuse, fuse_days);
     }
 }
 
-/// Print a single annotation in GitHub Actions format.
-pub fn print_annotation_github(ann: &Annotation, warn_within_days: u32) {
-    let file = ann.file.display().to_string();
-    let line = ann.line;
+/// Print a single fuse in GitHub Actions format.
+pub fn print_fuse_github(fuse: &Fuse, fuse_days: u32) {
+    let file = fuse.file.display().to_string();
+    let line = fuse.line;
 
-    match ann.status {
-        Status::Expired => {
+    match fuse.status {
+        Status::Detonated => {
             println!(
-                "::error file={},line={}::{} expired on {}: {}",
+                "::error file={},line={}::{} detonated on {}: {}",
                 file,
                 line,
-                ann.tag,
-                ann.date_str(),
-                ann.message
+                fuse.tag,
+                fuse.date_str(),
+                fuse.message
             );
         }
-        Status::ExpiringSoon => {
+        Status::Ticking => {
             // Calculate how many days remain
-            let days_msg = if warn_within_days > 0 {
-                format!(" (within {}d warning window)", warn_within_days)
+            let days_msg = if fuse_days > 0 {
+                format!(" (within {}d fuse window)", fuse_days)
             } else {
                 String::new()
             };
             println!(
-                "::warning file={},line={}::{} expires on {}{}:  {}",
+                "::warning file={},line={}::{} detonates on {}{}:  {}",
                 file,
                 line,
-                ann.tag,
-                ann.date_str(),
+                fuse.tag,
+                fuse.date_str(),
                 days_msg,
-                ann.message
+                fuse.message
             );
         }
-        Status::Ok => {
-            // Don't emit anything for OK annotations in CI output
+        Status::Inert => {
+            // Don't emit anything for inert fuses in CI output
         }
     }
 }
 
-/// Print a single annotation in GitHub Actions format for the `list` subcommand.
-pub fn print_github_list(annotations: &[&Annotation], warn_within_days: u32) {
-    for ann in annotations {
-        print_annotation_github(ann, warn_within_days);
+/// Print a slice of fuses in GitHub Actions format for the `manifest` subcommand.
+pub fn print_github_list(fuses: &[&Fuse], fuse_days: u32) {
+    for fuse in fuses {
+        print_fuse_github(fuse, fuse_days);
     }
 }
 
 // ─── Dispatch helpers ─────────────────────────────────────────────────────────
 
 /// Top-level dispatch: print a `ScanResult` in whatever format was requested.
-pub fn print_scan_result(result: &ScanResult, format: &OutputFormat, warn_within_days: u32) {
+pub fn print_scan_result(result: &ScanResult, format: &OutputFormat, fuse_days: u32) {
     match format {
-        OutputFormat::Terminal => print_terminal(result, warn_within_days, false),
+        OutputFormat::Terminal => print_terminal(result, fuse_days, false),
         OutputFormat::Json => print_json(result),
-        OutputFormat::GitHub => print_github(result, warn_within_days),
+        OutputFormat::GitHub => print_github(result, fuse_days),
     }
 }
 
-/// Top-level dispatch for the `list` subcommand.
+/// Top-level dispatch for the `manifest` subcommand.
 pub fn print_list(
-    annotations: &[&Annotation],
+    fuses: &[&Fuse],
     format: &OutputFormat,
-    warn_within_days: u32,
+    fuse_days: u32,
     scan_root: &Path,
 ) {
     let _ = scan_root; // available for future use (e.g. relative path display)
@@ -341,17 +341,17 @@ pub fn print_list(
 
     match format {
         OutputFormat::Terminal => {
-            for ann in annotations {
-                print_annotation_line_terminal(ann, use_color);
+            for fuse in fuses {
+                print_fuse_line_terminal(fuse, use_color);
             }
             println!();
-            eprintln!("{} annotation(s) listed", annotations.len());
+            eprintln!("{} fuse(s) listed", fuses.len());
         }
         OutputFormat::Json => {
-            print_json_list(annotations);
+            print_json_list(fuses);
         }
         OutputFormat::GitHub => {
-            print_github_list(annotations, warn_within_days);
+            print_github_list(fuses, fuse_days);
         }
     }
 }
@@ -369,8 +369,8 @@ mod tests {
         NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
     }
 
-    fn make_annotation(tag: &str, expiry: &str, status: Status, msg: &str) -> Annotation {
-        Annotation {
+    fn make_fuse(tag: &str, expiry: &str, status: Status, msg: &str) -> Fuse {
+        Fuse {
             file: PathBuf::from("src/foo.rs"),
             line: 42,
             tag: tag.to_string(),
@@ -382,14 +382,14 @@ mod tests {
         }
     }
 
-    fn make_annotation_with_owner(
+    fn make_fuse_with_owner(
         tag: &str,
         expiry: &str,
         status: Status,
         msg: &str,
         owner: &str,
-    ) -> Annotation {
-        Annotation {
+    ) -> Fuse {
+        Fuse {
             file: PathBuf::from("src/foo.rs"),
             line: 10,
             tag: tag.to_string(),
@@ -422,43 +422,43 @@ mod tests {
     }
 
     #[test]
-    fn test_json_annotation_from_annotation() {
-        let ann = make_annotation("TODO", "2020-01-01", Status::Expired, "remove this");
-        let j = JsonAnnotation::from_annotation(&ann);
+    fn test_json_fuse_from_fuse() {
+        let fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "remove this");
+        let j = JsonFuse::from_fuse(&fuse);
         assert_eq!(j.file, "src/foo.rs");
         assert_eq!(j.line, 42);
         assert_eq!(j.tag, "TODO");
         assert_eq!(j.date, "2020-01-01");
         assert_eq!(j.owner, None);
         assert_eq!(j.message, "remove this");
-        assert_eq!(j.status, "expired");
+        assert_eq!(j.status, "detonated");
     }
 
     #[test]
-    fn test_json_annotation_with_owner() {
-        let ann =
-            make_annotation_with_owner("FIXME", "2099-01-01", Status::Ok, "upgrade later", "bob");
-        let j = JsonAnnotation::from_annotation(&ann);
+    fn test_json_fuse_with_owner() {
+        let fuse =
+            make_fuse_with_owner("FIXME", "2099-01-01", Status::Inert, "upgrade later", "bob");
+        let j = JsonFuse::from_fuse(&fuse);
         assert_eq!(j.owner, Some("bob"));
-        assert_eq!(j.status, "ok");
+        assert_eq!(j.status, "inert");
     }
 
     #[test]
-    fn test_json_annotation_expiring_soon_status() {
-        let ann = make_annotation("HACK", "2025-06-10", Status::ExpiringSoon, "temp hack");
-        let j = JsonAnnotation::from_annotation(&ann);
-        assert_eq!(j.status, "expiring_soon");
+    fn test_json_fuse_ticking_status() {
+        let fuse = make_fuse("HACK", "2025-06-10", Status::Ticking, "temp hack");
+        let j = JsonFuse::from_fuse(&fuse);
+        assert_eq!(j.status, "ticking");
     }
 
     #[test]
     fn test_print_json_does_not_panic() {
         use crate::scanner::ScanResult;
         let result = ScanResult {
-            annotations: vec![
-                make_annotation("TODO", "2020-01-01", Status::Expired, "expired"),
-                make_annotation("FIXME", "2099-01-01", Status::Ok, "future"),
+            fuses: vec![
+                make_fuse("TODO", "2020-01-01", Status::Detonated, "detonated"),
+                make_fuse("FIXME", "2099-01-01", Status::Inert, "future"),
             ],
-            scanned_files: 5,
+            swept_files: 5,
             skipped_files: 1,
         };
         // Should not panic
@@ -467,34 +467,34 @@ mod tests {
 
     #[test]
     fn test_print_json_list_does_not_panic() {
-        let ann = make_annotation("TODO", "2020-01-01", Status::Expired, "expired");
-        print_json_list(&[&ann]);
+        let fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "detonated");
+        print_json_list(&[&fuse]);
     }
 
     #[test]
-    fn test_print_github_expired_format() {
+    fn test_print_github_detonated_format() {
         // Capture via manual construction; we just verify no panic and check format logic
-        let ann = make_annotation("TODO", "2020-01-01", Status::Expired, "remove legacy oauth");
+        let fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "remove legacy oauth");
         // No panic
-        print_annotation_github(&ann, 14);
+        print_fuse_github(&fuse, 14);
     }
 
     #[test]
-    fn test_print_github_expiring_soon_format() {
-        let ann = make_annotation(
+    fn test_print_github_ticking_format() {
+        let fuse = make_fuse(
             "FIXME",
             "2025-06-10",
-            Status::ExpiringSoon,
+            Status::Ticking,
             "fix before release",
         );
-        print_annotation_github(&ann, 14);
+        print_fuse_github(&fuse, 14);
     }
 
     #[test]
-    fn test_print_github_ok_is_silent() {
+    fn test_print_github_inert_is_silent() {
         // We can't easily capture stdout in unit tests, but we can at least ensure no panic
-        let ann = make_annotation("HACK", "2099-01-01", Status::Ok, "fine for now");
-        print_annotation_github(&ann, 0);
+        let fuse = make_fuse("HACK", "2099-01-01", Status::Inert, "fine for now");
+        print_fuse_github(&fuse, 0);
     }
 
     #[test]
@@ -521,12 +521,12 @@ mod tests {
     fn test_print_terminal_does_not_panic() {
         use crate::scanner::ScanResult;
         let result = ScanResult {
-            annotations: vec![
-                make_annotation("TODO", "2020-01-01", Status::Expired, "old"),
-                make_annotation("FIXME", "2025-06-08", Status::ExpiringSoon, "soon"),
-                make_annotation("HACK", "2099-12-31", Status::Ok, "future"),
+            fuses: vec![
+                make_fuse("TODO", "2020-01-01", Status::Detonated, "old"),
+                make_fuse("FIXME", "2025-06-08", Status::Ticking, "soon"),
+                make_fuse("HACK", "2099-12-31", Status::Inert, "future"),
             ],
-            scanned_files: 3,
+            swept_files: 3,
             skipped_files: 0,
         };
         // Should not panic regardless of color support
@@ -534,18 +534,18 @@ mod tests {
     }
 
     #[test]
-    fn test_print_annotation_line_terminal_with_owner() {
-        let ann =
-            make_annotation_with_owner("TODO", "2020-01-01", Status::Expired, "remove me", "alice");
+    fn test_print_fuse_line_terminal_with_owner() {
+        let fuse =
+            make_fuse_with_owner("TODO", "2020-01-01", Status::Detonated, "remove me", "alice");
         // Should not panic
-        print_annotation_line_terminal(&ann, false);
+        print_fuse_line_terminal(&fuse, false);
     }
 
     #[test]
     fn test_print_list_terminal_does_not_panic() {
-        let ann = make_annotation("TODO", "2020-01-01", Status::Expired, "list item");
+        let fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "list item");
         print_list(
-            &[&ann],
+            &[&fuse],
             &OutputFormat::Terminal,
             14,
             std::path::Path::new("."),
@@ -554,22 +554,22 @@ mod tests {
 
     #[test]
     fn test_print_list_json_does_not_panic() {
-        let ann = make_annotation("FIXME", "2099-01-01", Status::Ok, "future item");
-        print_list(&[&ann], &OutputFormat::Json, 0, std::path::Path::new("."));
+        let fuse = make_fuse("FIXME", "2099-01-01", Status::Inert, "future item");
+        print_list(&[&fuse], &OutputFormat::Json, 0, std::path::Path::new("."));
     }
 
     #[test]
     fn test_print_list_github_does_not_panic() {
-        let ann = make_annotation("HACK", "2020-01-01", Status::Expired, "github list");
-        print_list(&[&ann], &OutputFormat::GitHub, 0, std::path::Path::new("."));
+        let fuse = make_fuse("HACK", "2020-01-01", Status::Detonated, "github list");
+        print_list(&[&fuse], &OutputFormat::GitHub, 0, std::path::Path::new("."));
     }
 
     #[test]
     fn test_print_scan_result_dispatch() {
         use crate::scanner::ScanResult;
         let result = ScanResult {
-            annotations: vec![make_annotation("TODO", "2020-01-01", Status::Expired, "x")],
-            scanned_files: 1,
+            fuses: vec![make_fuse("TODO", "2020-01-01", Status::Detonated, "x")],
+            swept_files: 1,
             skipped_files: 0,
         };
         // All three formats should not panic
@@ -582,46 +582,46 @@ mod tests {
 
     #[test]
     fn test_owner_display_explicit_owner() {
-        let ann = make_annotation_with_owner("TODO", "2020-01-01", Status::Expired, "msg", "alice");
-        assert_eq!(owner_display(&ann), " [alice]");
+        let fuse = make_fuse_with_owner("TODO", "2020-01-01", Status::Detonated, "msg", "alice");
+        assert_eq!(owner_display(&fuse), " [alice]");
     }
 
     #[test]
     fn test_owner_display_blamed_owner() {
-        let mut ann = make_annotation("TODO", "2020-01-01", Status::Expired, "msg");
-        ann.blamed_owner = Some("bob".to_string());
-        assert_eq!(owner_display(&ann), " [~bob]");
+        let mut fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "msg");
+        fuse.blamed_owner = Some("bob".to_string());
+        assert_eq!(owner_display(&fuse), " [~bob]");
     }
 
     #[test]
     fn test_owner_display_no_owner() {
-        let ann = make_annotation("TODO", "2020-01-01", Status::Expired, "msg");
-        assert_eq!(owner_display(&ann), "");
+        let fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "msg");
+        assert_eq!(owner_display(&fuse), "");
     }
 
     #[test]
     fn test_owner_display_explicit_takes_precedence_over_blamed() {
         // When both owner and blamed_owner are set, explicit owner wins.
-        let mut ann =
-            make_annotation_with_owner("TODO", "2020-01-01", Status::Expired, "msg", "alice");
-        ann.blamed_owner = Some("bob".to_string());
+        let mut fuse =
+            make_fuse_with_owner("TODO", "2020-01-01", Status::Detonated, "msg", "alice");
+        fuse.blamed_owner = Some("bob".to_string());
         // Should show explicit owner, not blamed_owner.
-        assert_eq!(owner_display(&ann), " [alice]");
+        assert_eq!(owner_display(&fuse), " [alice]");
     }
 
     #[test]
-    fn test_json_annotation_includes_blamed_owner() {
-        let mut ann = make_annotation("TODO", "2020-01-01", Status::Expired, "msg");
-        ann.blamed_owner = Some("dave".to_string());
-        let j = JsonAnnotation::from_annotation(&ann);
+    fn test_json_fuse_includes_blamed_owner() {
+        let mut fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "msg");
+        fuse.blamed_owner = Some("dave".to_string());
+        let j = JsonFuse::from_fuse(&fuse);
         assert_eq!(j.blamed_owner, Some("dave"));
         assert_eq!(j.owner, None);
     }
 
     #[test]
-    fn test_json_annotation_blamed_owner_absent_when_none() {
-        let ann = make_annotation("TODO", "2020-01-01", Status::Expired, "msg");
-        let j = JsonAnnotation::from_annotation(&ann);
+    fn test_json_fuse_blamed_owner_absent_when_none() {
+        let fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "msg");
+        let j = JsonFuse::from_fuse(&fuse);
         assert_eq!(j.blamed_owner, None);
         // The field is skip_serializing_if = None, so it must not appear in the JSON string.
         let json = serde_json::to_string(&j).unwrap();
@@ -629,10 +629,10 @@ mod tests {
     }
 
     #[test]
-    fn test_print_annotation_line_terminal_with_blamed_owner() {
-        let mut ann = make_annotation("TODO", "2020-01-01", Status::Expired, "msg");
-        ann.blamed_owner = Some("eve".to_string());
+    fn test_print_fuse_line_terminal_with_blamed_owner() {
+        let mut fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "msg");
+        fuse.blamed_owner = Some("eve".to_string());
         // Should not panic; no assertion on stdout since we can't capture easily.
-        print_annotation_line_terminal(&ann, false);
+        print_fuse_line_terminal(&fuse, false);
     }
 }

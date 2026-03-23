@@ -28,25 +28,30 @@ fn no_overrides() -> CliOverrides {
 #[test]
 fn test_default_config_tags() {
     let cfg = Config::default();
-    let tags = &cfg.tags;
-    assert!(tags.contains(&"TODO".to_string()));
-    assert!(tags.contains(&"FIXME".to_string()));
-    assert!(tags.contains(&"HACK".to_string()));
-    assert!(tags.contains(&"TEMP".to_string()));
-    assert!(tags.contains(&"REMOVEME".to_string()));
-    assert_eq!(tags.len(), 5);
+    let triggers = &cfg.triggers;
+    assert!(triggers.contains(&"TODO".to_string()));
+    assert!(triggers.contains(&"FIXME".to_string()));
+    assert!(triggers.contains(&"HACK".to_string()));
+    assert!(triggers.contains(&"TEMP".to_string()));
+    assert!(triggers.contains(&"REMOVEME".to_string()));
+    assert!(triggers.contains(&"DEBT".to_string()));
+    assert!(triggers.contains(&"STOPSHIP".to_string()));
+    assert!(triggers.contains(&"WORKAROUND".to_string()));
+    assert!(triggers.contains(&"DEPRECATED".to_string()));
+    assert!(triggers.contains(&"BUG".to_string()));
+    assert_eq!(triggers.len(), 10);
 }
 
 #[test]
-fn test_default_config_warn_within_days_is_zero() {
+fn test_default_config_fuse_days_is_zero() {
     let cfg = Config::default();
-    assert_eq!(cfg.warn_within_days, 0);
+    assert_eq!(cfg.fuse_days, 0);
 }
 
 #[test]
-fn test_default_config_fail_on_warn_is_false() {
+fn test_default_config_fail_on_ticking_is_false() {
     let cfg = Config::default();
-    assert!(!cfg.fail_on_warn);
+    assert!(!cfg.fail_on_ticking);
 }
 
 #[test]
@@ -105,9 +110,9 @@ fn test_default_config_excludes_contain_vendor() {
 fn test_load_config_no_file_uses_defaults() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = load_config(dir.path(), &no_overrides()).unwrap();
-    assert_eq!(cfg.tags, Config::default().tags);
-    assert_eq!(cfg.warn_within_days, 0);
-    assert!(!cfg.fail_on_warn);
+    assert_eq!(cfg.triggers, Config::default().triggers);
+    assert_eq!(cfg.fuse_days, 0);
+    assert!(!cfg.fail_on_ticking);
 }
 
 #[test]
@@ -121,17 +126,17 @@ fn test_load_config_no_file_no_overrides_default_extensions() {
 // ─── load_config: config file present ────────────────────────────────────────
 
 #[test]
-fn test_load_config_reads_tags_from_file() {
-    let dir = write_config(r#"tags = ["TODO", "FIXME"]"#);
+fn test_load_config_reads_triggers_from_file() {
+    let dir = write_config(r#"triggers = ["TODO", "FIXME"]"#);
     let cfg = load_config(dir.path(), &no_overrides()).unwrap();
-    assert_eq!(cfg.tags, vec!["TODO", "FIXME"]);
+    assert_eq!(cfg.triggers, vec!["TODO", "FIXME"]);
 }
 
 #[test]
-fn test_load_config_reads_warn_within_days() {
-    let dir = write_config("warn_within_days = 21\n");
+fn test_load_config_reads_fuse_days() {
+    let dir = write_config("fuse_days = 21\n");
     let cfg = load_config(dir.path(), &no_overrides()).unwrap();
-    assert_eq!(cfg.warn_within_days, 21);
+    assert_eq!(cfg.fuse_days, 21);
 }
 
 #[test]
@@ -151,13 +156,13 @@ fn test_load_config_reads_extensions() {
 
 #[test]
 fn test_load_config_partial_file_fills_rest_from_defaults() {
-    // Only warn_within_days specified; tags, exclude, extensions should come from defaults
-    let dir = write_config("warn_within_days = 7\n");
+    // Only fuse_days specified; triggers, exclude, extensions should come from defaults
+    let dir = write_config("fuse_days = 7\n");
     let cfg = load_config(dir.path(), &no_overrides()).unwrap();
-    assert_eq!(cfg.warn_within_days, 7);
-    // Tags should fall back to defaults
-    assert!(cfg.tags.contains(&"TODO".to_string()));
-    assert!(cfg.tags.contains(&"FIXME".to_string()));
+    assert_eq!(cfg.fuse_days, 7);
+    // Triggers should fall back to defaults
+    assert!(cfg.triggers.contains(&"TODO".to_string()));
+    assert!(cfg.triggers.contains(&"FIXME".to_string()));
     // Extensions should fall back to defaults
     assert!(cfg.extensions.contains(&"rs".to_string()));
 }
@@ -166,23 +171,23 @@ fn test_load_config_partial_file_fills_rest_from_defaults() {
 fn test_load_config_empty_file_uses_defaults() {
     let dir = write_config("");
     let cfg = load_config(dir.path(), &no_overrides()).unwrap();
-    assert_eq!(cfg.tags, Config::default().tags);
-    assert_eq!(cfg.warn_within_days, 0);
+    assert_eq!(cfg.triggers, Config::default().triggers);
+    assert_eq!(cfg.fuse_days, 0);
 }
 
 #[test]
 fn test_load_config_full_file() {
     let toml = r#"
-tags = ["TODO", "FIXME", "HACK"]
-warn_within_days = 14
+triggers = ["TODO", "FIXME", "HACK"]
+fuse_days = 14
 exclude = ["vendor/**", "node_modules/**", ".git/**"]
 extensions = ["rs", "go", "py"]
 "#;
     let dir = write_config(toml);
     let cfg = load_config(dir.path(), &no_overrides()).unwrap();
 
-    assert_eq!(cfg.tags, vec!["TODO", "FIXME", "HACK"]);
-    assert_eq!(cfg.warn_within_days, 14);
+    assert_eq!(cfg.triggers, vec!["TODO", "FIXME", "HACK"]);
+    assert_eq!(cfg.fuse_days, 14);
     assert!(cfg.exclude_patterns.contains(&"vendor/**".to_string()));
     assert_eq!(cfg.extensions, vec!["rs", "go", "py"]);
 }
@@ -209,49 +214,49 @@ fn test_load_config_unknown_field_returns_error() {
 
 #[test]
 fn test_load_config_wrong_type_returns_error() {
-    // warn_within_days should be an integer, not a string
-    let dir = write_config(r#"warn_within_days = "fourteen""#);
+    // fuse_days should be an integer, not a string
+    let dir = write_config(r#"fuse_days = "fourteen""#);
     let result = load_config(dir.path(), &no_overrides());
     assert!(
         result.is_err(),
-        "wrong type for warn_within_days should error"
+        "wrong type for fuse_days should error"
     );
 }
 
 // ─── CLI overrides ────────────────────────────────────────────────────────────
 
 #[test]
-fn test_cli_override_warn_within_overrides_file() {
-    let dir = write_config("warn_within_days = 7\n");
+fn test_cli_override_fuse_overrides_file() {
+    let dir = write_config("fuse_days = 7\n");
     let overrides = CliOverrides::new(Some("30d".to_string()), false);
     let cfg = load_config(dir.path(), &overrides).unwrap();
     assert_eq!(
-        cfg.warn_within_days, 30,
-        "CLI --warn-within should override config file"
+        cfg.fuse_days, 30,
+        "CLI --fuse should override config file"
     );
 }
 
 #[test]
-fn test_cli_override_warn_within_overrides_default() {
+fn test_cli_override_fuse_overrides_default() {
     let dir = tempfile::tempdir().unwrap();
     let overrides = CliOverrides::new(Some("14d".to_string()), false);
     let cfg = load_config(dir.path(), &overrides).unwrap();
-    assert_eq!(cfg.warn_within_days, 14);
+    assert_eq!(cfg.fuse_days, 14);
 }
 
 #[test]
-fn test_cli_override_fail_on_warn_sets_flag() {
+fn test_cli_override_fail_on_ticking_sets_flag() {
     let dir = tempfile::tempdir().unwrap();
     let overrides = CliOverrides::new(None, true);
     let cfg = load_config(dir.path(), &overrides).unwrap();
-    assert!(cfg.fail_on_warn);
+    assert!(cfg.fail_on_ticking);
 }
 
 #[test]
-fn test_cli_override_fail_on_warn_false_by_default() {
+fn test_cli_override_fail_on_ticking_false_by_default() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = load_config(dir.path(), &no_overrides()).unwrap();
-    assert!(!cfg.fail_on_warn);
+    assert!(!cfg.fail_on_ticking);
 }
 
 #[test]
@@ -281,7 +286,7 @@ fn test_cli_override_zero_days_is_valid() {
     let dir = tempfile::tempdir().unwrap();
     let overrides = CliOverrides::new(Some("0d".to_string()), false);
     let cfg = load_config(dir.path(), &overrides).unwrap();
-    assert_eq!(cfg.warn_within_days, 0);
+    assert_eq!(cfg.fuse_days, 0);
 }
 
 #[test]
@@ -289,7 +294,7 @@ fn test_cli_override_large_days_is_valid() {
     let dir = tempfile::tempdir().unwrap();
     let overrides = CliOverrides::new(Some("365d".to_string()), false);
     let cfg = load_config(dir.path(), &overrides).unwrap();
-    assert_eq!(cfg.warn_within_days, 365);
+    assert_eq!(cfg.fuse_days, 365);
 }
 
 // ─── GlobSet / extension helpers ─────────────────────────────────────────────
@@ -421,28 +426,28 @@ fn test_extension_allowed_empty_list_allows_all() {
     assert!(cfg.extension_allowed(Path::new("binary.exe")));
 }
 
-// ─── annotation_regex_pattern ────────────────────────────────────────────────
+// ─── fuse_regex_pattern ────────────────────────────────────────────────────────
 
 #[test]
-fn test_annotation_regex_pattern_contains_all_default_tags() {
+fn test_fuse_regex_pattern_contains_all_default_triggers() {
     let cfg = Config::default();
-    let pattern = cfg.annotation_regex_pattern();
+    let pattern = cfg.fuse_regex_pattern();
     for tag in &["TODO", "FIXME", "HACK", "TEMP", "REMOVEME"] {
         assert!(
             pattern.contains(tag),
-            "pattern should contain tag '{}'",
+            "pattern should contain trigger '{}'",
             tag
         );
     }
 }
 
 #[test]
-fn test_annotation_regex_pattern_custom_tags() {
+fn test_fuse_regex_pattern_custom_triggers() {
     let cfg = Config {
-        tags: vec!["MYTAGONE".to_string(), "MYTAGTWO".to_string()],
+        triggers: vec!["MYTAGONE".to_string(), "MYTAGTWO".to_string()],
         ..Config::default()
     };
-    let pattern = cfg.annotation_regex_pattern();
+    let pattern = cfg.fuse_regex_pattern();
     assert!(pattern.contains("MYTAGONE"));
     assert!(pattern.contains("MYTAGTWO"));
     assert!(
@@ -452,21 +457,21 @@ fn test_annotation_regex_pattern_custom_tags() {
 }
 
 #[test]
-fn test_annotation_regex_pattern_is_valid_regex() {
+fn test_fuse_regex_pattern_is_valid_regex() {
     let cfg = Config::default();
-    let pattern = cfg.annotation_regex_pattern();
+    let pattern = cfg.fuse_regex_pattern();
     let result = regex::Regex::new(&pattern);
     assert!(
         result.is_ok(),
-        "annotation_regex_pattern must produce a valid regex: {:?}",
+        "fuse_regex_pattern must produce a valid regex: {:?}",
         result.err()
     );
 }
 
 #[test]
-fn test_annotation_regex_pattern_matches_basic_annotation() {
+fn test_fuse_regex_pattern_matches_basic_annotation() {
     let cfg = Config::default();
-    let pattern = cfg.annotation_regex_pattern();
+    let pattern = cfg.fuse_regex_pattern();
     let re = regex::Regex::new(&pattern).unwrap();
     assert!(re.is_match("// TODO[2020-01-01]: some message"));
     assert!(re.is_match("# FIXME[2099-12-31]: future task"));
@@ -474,9 +479,9 @@ fn test_annotation_regex_pattern_matches_basic_annotation() {
 }
 
 #[test]
-fn test_annotation_regex_pattern_does_not_match_plain_todo() {
+fn test_fuse_regex_pattern_does_not_match_plain_todo() {
     let cfg = Config::default();
-    let pattern = cfg.annotation_regex_pattern();
+    let pattern = cfg.fuse_regex_pattern();
     let re = regex::Regex::new(&pattern).unwrap();
     assert!(!re.is_match("// TODO: no date"));
     assert!(!re.is_match("// FIXME: no date bracket"));
@@ -484,9 +489,9 @@ fn test_annotation_regex_pattern_does_not_match_plain_todo() {
 }
 
 #[test]
-fn test_annotation_regex_pattern_matches_with_owner() {
+fn test_fuse_regex_pattern_matches_with_owner() {
     let cfg = Config::default();
-    let pattern = cfg.annotation_regex_pattern();
+    let pattern = cfg.fuse_regex_pattern();
     let re = regex::Regex::new(&pattern).unwrap();
     assert!(re.is_match("// TODO[2020-01-01][alice]: owned annotation"));
     assert!(re.is_match("# FIXME[2099-01-01][bob]: another owned"));
@@ -497,22 +502,22 @@ fn test_annotation_regex_pattern_matches_with_owner() {
 #[test]
 fn test_cli_overrides_default() {
     let overrides = CliOverrides::default();
-    assert!(overrides.warn_within.is_none());
-    assert!(!overrides.fail_on_warn);
+    assert!(overrides.fuse.is_none());
+    assert!(!overrides.fail_on_ticking);
 }
 
 #[test]
 fn test_cli_overrides_new_with_values() {
     let overrides = CliOverrides::new(Some("30d".to_string()), true);
-    assert_eq!(overrides.warn_within, Some("30d".to_string()));
-    assert!(overrides.fail_on_warn);
+    assert_eq!(overrides.fuse, Some("30d".to_string()));
+    assert!(overrides.fail_on_ticking);
 }
 
 #[test]
-fn test_cli_overrides_new_without_warn_within() {
+fn test_cli_overrides_new_without_fuse() {
     let overrides = CliOverrides::new(None, false);
-    assert!(overrides.warn_within.is_none());
-    assert!(!overrides.fail_on_warn);
+    assert!(overrides.fuse.is_none());
+    assert!(!overrides.fail_on_ticking);
 }
 
 // ─── Config interaction with scanner ─────────────────────────────────────────
@@ -522,16 +527,16 @@ fn test_config_from_file_integrates_with_scanner() {
     use std::io::Write as _;
     use timebomb::scanner::scan;
 
-    // Write a config that only scans .rs files and has a 14-day warn window
+    // Write a config that only scans .rs files and has a 14-day fuse window
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join(".timebomb.toml");
     {
         let mut f = std::fs::File::create(&config_path).unwrap();
         writeln!(f, r#"extensions = ["rs"]"#).unwrap();
-        writeln!(f, "warn_within_days = 14").unwrap();
+        writeln!(f, "fuse_days = 14").unwrap();
     }
 
-    // Create a .rs file with annotations
+    // Create a .rs file with fuses
     let src_path = dir.path().join("main.rs");
     {
         let mut f = std::fs::File::create(&src_path).unwrap();
@@ -539,7 +544,7 @@ fn test_config_from_file_integrates_with_scanner() {
         writeln!(f, "// FIXME[2099-01-01]: future").unwrap();
     }
 
-    // Create a .py file with annotations — should be ignored per config
+    // Create a .py file with fuses — should be ignored per config
     let py_path = dir.path().join("script.py");
     {
         let mut f = std::fs::File::create(&py_path).unwrap();
@@ -552,11 +557,11 @@ fn test_config_from_file_integrates_with_scanner() {
 
     // Only main.rs should be scanned
     assert_eq!(
-        result.scanned_files, 1,
+        result.swept_files, 1,
         "only .rs file should be scanned per config extensions"
     );
-    assert_eq!(result.annotations.len(), 2);
-    assert!(result.has_expired());
+    assert_eq!(result.fuses.len(), 2);
+    assert!(result.has_detonated());
 }
 
 #[test]
@@ -592,10 +597,10 @@ fn test_config_exclude_pattern_integrates_with_scanner() {
     let result = scan(dir.path(), &cfg, today).unwrap();
 
     assert_eq!(
-        result.scanned_files, 1,
+        result.swept_files, 1,
         "generated/ directory should be excluded"
     );
-    // The one annotation found should be from main.rs
-    assert_eq!(result.annotations.len(), 1);
-    assert_eq!(result.annotations[0].file, std::path::Path::new("main.rs"));
+    // The one fuse found should be from main.rs
+    assert_eq!(result.fuses.len(), 1);
+    assert_eq!(result.fuses[0].file, std::path::Path::new("main.rs"));
 }
