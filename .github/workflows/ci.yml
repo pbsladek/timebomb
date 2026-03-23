@@ -148,7 +148,7 @@ jobs:
           set -euo pipefail
           mkdir -p "${{ runner.temp }}/smoke-json"
           echo "// FIXME[2020-01-01]: old" > "${{ runner.temp }}/smoke-json/lib.rs"
-          ./target/release/timebomb check "${{ runner.temp }}/smoke-json" --format json | python3 -m json.tool > /dev/null
+          (./target/release/timebomb check "${{ runner.temp }}/smoke-json" --format json || true) | python3 -m json.tool > /dev/null
       - name: Smoke — GitHub Actions format emits workflow commands
         run: |
           set -euo pipefail

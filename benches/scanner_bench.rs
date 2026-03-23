@@ -2,9 +2,12 @@ use chrono::NaiveDate;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::io::Write;
 use std::path::Path;
-use tempfile::NamedTempFile;
-use timebomb::config::Config;
-use timebomb::scanner::{build_regex, is_binary, scan_content, scan_str};
+use tempfile::{NamedTempFile, TempDir};
+use timebomb::config::{CliOverrides, Config};
+use timebomb::diff::parse_unified_diff;
+use timebomb::output::{print_github, print_json, print_terminal};
+use timebomb::scanner::{build_regex, is_binary, scan, scan_content, scan_str};
+use timebomb::snooze::{append_reason, snooze_line};
 
 // ── Fixture builders ──────────────────────────────────────────────────────────
 
@@ -340,6 +343,191 @@ fn bench_annotation_regex_pattern(c: &mut Criterion) {
     });
 }
 
+// ── end-to-end scan() benchmark ───────────────────────────────────────────────
+
+/// Write `n` synthetic Rust source files into a tempdir and benchmark the full
+/// `scan()` call including directory walk, binary detection, and rayon parallel
+/// map. Files contain a realistic mix of annotations (1 per 100 lines).
+fn build_scan_tempdir(file_count: usize) -> TempDir {
+    let dir = TempDir::new().unwrap();
+    for i in 0..file_count {
+        let content = build_content(200, 100); // 200-line file, ~2 annotations each
+        let path = dir.path().join(format!("module_{}.rs", i));
+        std::fs::write(&path, content).unwrap();
+    }
+    dir
+}
+
+fn bench_scan_end_to_end(c: &mut Criterion) {
+    let today = fixed_today();
+    let cfg = default_config();
+
+    let mut group = c.benchmark_group("scan/end_to_end");
+
+    for &n in &[10usize, 50, 200] {
+        let dir = build_scan_tempdir(n);
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("{}_files", n)),
+            &dir,
+            |b, dir| b.iter(|| scan(dir.path(), &cfg, today).unwrap()),
+        );
+    }
+
+    group.finish();
+}
+
+// ── parse_unified_diff benchmark ──────────────────────────────────────────────
+
+fn build_diff(hunk_count: usize) -> String {
+    let mut out = String::with_capacity(hunk_count * 120);
+    out.push_str("--- a/src/main.rs\n+++ b/src/main.rs\n");
+    for i in 0..hunk_count {
+        let start = i * 10 + 1;
+        out.push_str(&format!("@@ -{start},3 +{start},4 @@\n"));
+        out.push_str("-old line\n+new line A\n+new line B\n context\n");
+    }
+    out
+}
+
+fn bench_parse_unified_diff(c: &mut Criterion) {
+    let diff_500 = build_diff(500);
+    let diff_5000 = build_diff(5_000);
+
+    let mut group = c.benchmark_group("parse_unified_diff");
+
+    group.throughput(Throughput::Elements(500));
+    group.bench_function("500_hunks", |b| b.iter(|| parse_unified_diff(&diff_500)));
+
+    group.throughput(Throughput::Elements(5_000));
+    group.bench_function("5000_hunks", |b| b.iter(|| parse_unified_diff(&diff_5000)));
+
+    group.finish();
+}
+
+// ── output formatter benchmarks ───────────────────────────────────────────────
+
+fn build_scan_result_for_output(annotation_count: usize) -> timebomb::scanner::ScanResult {
+    let cfg = default_config();
+    let today = fixed_today();
+    let total = annotation_count * 10;
+    let content = build_content(total, 10);
+    let path = Path::new("bench/big.rs");
+    let regex = build_regex(&cfg).unwrap();
+    let annotations = scan_content(&content, path, &regex, &cfg, today).unwrap();
+    timebomb::scanner::ScanResult {
+        annotations,
+        scanned_files: 1,
+        skipped_files: 0,
+    }
+}
+
+fn bench_output_formatters(c: &mut Criterion) {
+    let result_100 = build_scan_result_for_output(100);
+    let result_500 = build_scan_result_for_output(500);
+
+    let mut group = c.benchmark_group("output_formatters");
+
+    group.throughput(Throughput::Elements(100));
+    group.bench_function("terminal_100", |b| {
+        b.iter(|| print_terminal(&result_100, 7, false))
+    });
+    group.bench_function("json_100", |b| b.iter(|| print_json(&result_100)));
+    group.bench_function("github_100", |b| b.iter(|| print_github(&result_100, 7)));
+
+    group.throughput(Throughput::Elements(500));
+    group.bench_function("terminal_500", |b| {
+        b.iter(|| print_terminal(&result_500, 7, false))
+    });
+    group.bench_function("json_500", |b| b.iter(|| print_json(&result_500)));
+    group.bench_function("github_500", |b| b.iter(|| print_github(&result_500, 7)));
+
+    group.finish();
+}
+
+// ── snooze_line / append_reason micro-benchmarks ──────────────────────────────
+
+fn bench_snooze_line(c: &mut Criterion) {
+    let new_date = NaiveDate::from_ymd_opt(2027, 1, 1).unwrap();
+
+    let line_match = "    // TODO[2020-01-01]: remove this legacy shim\n";
+    let line_no_match = "    let result = compute(input);\n";
+    let line_multi = "    // TODO[2020-01-01]: first // FIXME[2021-03-01]: second\n";
+
+    let mut group = c.benchmark_group("snooze_line");
+    group.bench_function("match", |b| b.iter(|| snooze_line(line_match, new_date)));
+    group.bench_function("no_match", |b| {
+        b.iter(|| snooze_line(line_no_match, new_date))
+    });
+    group.bench_function("multi_annotation", |b| {
+        b.iter(|| snooze_line(line_multi, new_date))
+    });
+    group.finish();
+}
+
+fn bench_append_reason(c: &mut Criterion) {
+    let line_with_annotation = "    // TODO[2020-01-01]: remove after upgrade\n";
+    let line_without = "    let x = compute();\n";
+    let reason = "blocked on upstream library release";
+
+    let mut group = c.benchmark_group("append_reason");
+    group.bench_function("with_annotation", |b| {
+        b.iter(|| append_reason(line_with_annotation, reason))
+    });
+    group.bench_function("without_annotation", |b| {
+        b.iter(|| append_reason(line_without, reason))
+    });
+    group.finish();
+}
+
+// ── config::load_config TOML parse benchmark ──────────────────────────────────
+
+fn bench_load_config(c: &mut Criterion) {
+    let dir = TempDir::new().unwrap();
+    let toml = r#"
+tags = ["TODO", "FIXME", "HACK", "TEMP", "REMOVEME"]
+exclude = [
+    "target/**", "vendor/**", "*.min.js",
+    "node_modules/**", "dist/**", ".git/**",
+]
+extensions = ["rs", "py", "go", "ts", "tsx", "js", "sql", "yaml"]
+warn_within_days = 14
+max_expired = 0
+max_expiring_soon = 5
+"#;
+    std::fs::write(dir.path().join(".timebomb.toml"), toml).unwrap();
+    let overrides = CliOverrides::default();
+
+    c.bench_function("load_config/toml_parse", |b| {
+        b.iter(|| timebomb::config::load_config(dir.path(), &overrides).unwrap())
+    });
+}
+
+// ── rayon scaling benchmark ───────────────────────────────────────────────────
+
+fn bench_rayon_scaling(c: &mut Criterion) {
+    let today = fixed_today();
+    let cfg = default_config();
+    let dir = build_scan_tempdir(100);
+
+    let mut group = c.benchmark_group("scan/rayon_scaling");
+    group.throughput(Throughput::Elements(100));
+
+    group.bench_function("1_thread", |b| {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap();
+        b.iter(|| pool.install(|| scan(dir.path(), &cfg, today).unwrap()))
+    });
+
+    group.bench_function("default_threads", |b| {
+        b.iter(|| scan(dir.path(), &cfg, today).unwrap())
+    });
+
+    group.finish();
+}
+
 // ── registration ─────────────────────────────────────────────────────────────
 
 criterion_group!(
@@ -353,5 +541,12 @@ criterion_group!(
     bench_is_binary,
     bench_per_line_regex,
     bench_annotation_regex_pattern,
+    bench_scan_end_to_end,
+    bench_parse_unified_diff,
+    bench_output_formatters,
+    bench_snooze_line,
+    bench_append_reason,
+    bench_load_config,
+    bench_rayon_scaling,
 );
 criterion_main!(benches);
