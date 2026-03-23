@@ -215,9 +215,9 @@ fn bench_scan_str_includes_regex_compile(c: &mut Criterion) {
 fn bench_build_regex(c: &mut Criterion) {
     let cfg_default = default_config();
 
-    // Config with all 5 default tags
+    // Config with 5 triggers
     let cfg_5_tags = Config {
-        tags: vec![
+        triggers: vec![
             "TODO".into(),
             "FIXME".into(),
             "HACK".into(),
@@ -227,25 +227,25 @@ fn bench_build_regex(c: &mut Criterion) {
         ..Config::default()
     };
 
-    // Config with a single tag — shorter alternation
+    // Config with a single trigger — shorter alternation
     let cfg_1_tag = Config {
-        tags: vec!["TODO".into()],
+        triggers: vec!["TODO".into()],
         ..Config::default()
     };
 
-    // Config with many tags — longer alternation
+    // Config with many triggers — longer alternation
     let cfg_10_tags = Config {
-        tags: vec![
+        triggers: vec![
             "TODO".into(),
             "FIXME".into(),
             "HACK".into(),
             "TEMP".into(),
             "REMOVEME".into(),
-            "NOTE".into(),
-            "WARN".into(),
-            "BUG".into(),
-            "CLEANUP".into(),
+            "DEBT".into(),
+            "STOPSHIP".into(),
+            "WORKAROUND".into(),
             "DEPRECATED".into(),
+            "BUG".into(),
         ],
         ..Config::default()
     };
@@ -333,13 +333,13 @@ fn bench_per_line_regex(c: &mut Criterion) {
     group.finish();
 }
 
-// ── annotation_regex_pattern benchmark ───────────────────────────────────────
+// ── fuse_regex_pattern benchmark ─────────────────────────────────────────────
 
-fn bench_annotation_regex_pattern(c: &mut Criterion) {
+fn bench_fuse_regex_pattern(c: &mut Criterion) {
     let cfg = default_config();
 
-    c.bench_function("annotation_regex_pattern_build_string", |b| {
-        b.iter(|| cfg.annotation_regex_pattern())
+    c.bench_function("fuse_regex_pattern_build_string", |b| {
+        b.iter(|| cfg.fuse_regex_pattern())
     });
 }
 
@@ -445,15 +445,15 @@ fn bench_append_reason(c: &mut Criterion) {
 fn bench_load_config(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let toml = r#"
-tags = ["TODO", "FIXME", "HACK", "TEMP", "REMOVEME"]
+triggers = ["TODO", "FIXME", "HACK", "TEMP", "REMOVEME"]
 exclude = [
     "target/**", "vendor/**", "*.min.js",
     "node_modules/**", "dist/**", ".git/**",
 ]
 extensions = ["rs", "py", "go", "ts", "tsx", "js", "sql", "yaml"]
-warn_within_days = 14
-max_expired = 0
-max_expiring_soon = 5
+fuse_days = 14
+max_detonated = 0
+max_ticking = 5
 "#;
     std::fs::write(dir.path().join(".timebomb.toml"), toml).unwrap();
     let overrides = CliOverrides::default();
@@ -505,7 +505,7 @@ criterion_group! {
         bench_build_regex,
         bench_is_binary,
         bench_per_line_regex,
-        bench_annotation_regex_pattern,
+        bench_fuse_regex_pattern,
         bench_scan_end_to_end,
         bench_parse_unified_diff,
         bench_snooze_line,

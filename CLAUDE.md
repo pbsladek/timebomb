@@ -6,7 +6,7 @@ This file gives Claude (and any other AI coding assistant) the context needed to
 
 ## What this project is
 
-`timebomb` is a Rust CLI tool that scans source code for structured expiry annotations (`TODO[2026-06-01]: ...`) and fails with a non-zero exit code in CI when any deadline has passed. It is designed to enforce the social contract that temporary code actually gets removed.
+`timebomb` is a Rust CLI tool that scans source code for structured expiry annotations (`TODO[2026-06-01]: ...`) and fails when any deadline has passed. It is designed to enforce the social contract that temporary code actually gets removed.
 
 ---
 
@@ -19,9 +19,10 @@ cargo test                   # run all unit + integration tests
 cargo test -- --nocapture    # show eprintln! output during tests
 cargo clippy -- -D warnings  # lint; CI fails on any warning
 cargo fmt                    # format; CI checks with --check
+make smoke                   # end-to-end smoke tests against the release binary
 ```
 
-All four commands must pass cleanly before any PR is merged. There is no separate script — just `cargo`.
+All five must pass cleanly before any PR is merged.
 
 ---
 
@@ -30,37 +31,61 @@ All four commands must pass cleanly before any PR is merged. There is no separat
 ```
 src/
   main.rs        CLI entrypoint; resolve_config(); subcommand dispatch; exit codes
-  cli.rs         clap derive structs: Cli, CheckArgs, ListArgs, FixArgs, BaselineArgs, FormatArg
+  cli.rs         clap derive structs: Cli, Command, SweepArgs, ManifestArgs, …, FormatArg
   config.rs      .timebomb.toml loading, CLI overlay merging, glob exclusion, extension filter
   scanner.rs     scan(), scan_file(), scan_content(), build_regex(), is_binary()
-  annotation.rs  Annotation struct, Status enum, compute_status()
+  annotation.rs  Fuse struct, Status enum (Detonated/Ticking/Inert), compute_status()
   output.rs      Terminal / JSON / GitHub Actions formatters
   error.rs       Error enum, Result alias, parse_duration_days()
   blame.rs       git blame integration for --blame enrichment
-  hook.rs        Pre-commit hook install / uninstall
-  trend.rs       Report snapshot comparison (trend command)
+  hook.rs        Pre-commit tripwire install / uninstall
+  trend.rs       Report snapshot comparison (fallout command)
   report.rs      Report JSON generation and writing
-  stats.rs       Aggregate stats by owner / tag
+  stats.rs       Aggregate stats by owner / tag (intel command)
   init.rs        timebomb init command
-  add.rs         timebomb add command (insert annotations)
-  snooze.rs      timebomb snooze command (bump deadlines in-place)
-  fix.rs         timebomb fix command (interactive expired annotation resolution)
-  diff.rs        Unified diff parsing for --changed mode
-  baseline.rs    Baseline save/show/ratchet enforcement
+  add.rs         timebomb plant command (insert fuses)
+  snooze.rs      timebomb delay command (bump deadlines in-place)
+  fix.rs         timebomb defuse command (interactive detonated fuse resolution)
+  diff.rs        Unified diff parsing for --since/--changed mode
+  baseline.rs    Bunker save/show/ratchet enforcement
   git.rs         Git helpers (validate_git_ref, changed files, repo detection)
   lib.rs         Public re-exports (makes src/ importable from tests/)
 
 tests/
   scanner_tests.rs    Integration tests against fixture files
   config_tests.rs     Integration tests for config loading and merging
-  fix_tests.rs        Integration tests for the fix command
-  diff_tests.rs       Integration tests for diff parsing / --changed mode
-  baseline_tests.rs   Integration tests for baseline ratchet enforcement
-  fixtures/
-    sample.rs         Rust source with known mix of expired/expiring-soon/future annotations
-    sample.py         Python source, same mix
-    sample.sql        SQL source, same mix
+  fix_tests.rs        Integration tests for the defuse command
+  diff_tests.rs       Integration tests for diff parsing / --since mode
+  baseline_tests.rs   Integration tests for bunker ratchet enforcement
+  fixtures/           One sample.* file per supported language extension
 ```
+
+---
+
+## Naming — the bomb theme
+
+Everything in the codebase uses bomb/explosion terminology. Key mappings:
+
+| Concept | Name in code |
+|---------|-------------|
+| Annotation / TODO comment with a date | **fuse** (`Fuse` struct) |
+| Past-due fuse | **detonated** (`Status::Detonated`) |
+| Fuse within the warning window | **ticking** (`Status::Ticking`) |
+| Fuse safely in the future | **inert** (`Status::Inert`) |
+| Number of files scanned | **swept_files** |
+| Scan and fail in CI | **sweep** (subcommand) |
+| List all fuses | **manifest** (subcommand) |
+| Insert a fuse | **plant** (subcommand) |
+| Bump a deadline | **delay** (subcommand) |
+| Remove a fuse | **disarm** (subcommand) |
+| Stats by owner/tag | **intel** (subcommand) |
+| Pre-commit hook | **tripwire** (subcommand: `set` / `cut`) |
+| Compare two snapshots | **fallout** (subcommand) |
+| Interactive resolve detonated fuses | **defuse** (subcommand) |
+| Baseline ratchet | **bunker** (subcommand: `save` / `show`) |
+| Warning window (days) | **fuse_days** (config key) |
+| Max detonated ceiling | **max_detonated** (config key) |
+| Max ticking ceiling | **max_ticking** (config key) |
 
 ---
 
@@ -68,20 +93,20 @@ tests/
 
 ### `today` is injected, never fetched internally
 
-`scan()`, `scan_content()`, and `Annotation::compute_status()` all accept `today: NaiveDate` as a parameter. "Today" is derived once in `main.rs` at startup and threaded through. This makes every test deterministic without mocks or time-travel hacks.
+`scan()`, `scan_content()`, and `Fuse::compute_status()` all accept `today: NaiveDate` as a parameter. "Today" is derived once in `main.rs` at startup and threaded through. This makes every test deterministic without mocks or time-travel hacks.
 
 ### Regex compiled once
 
 `build_regex(config)` is called once in `scan()` before the walk loop. The resulting `Regex` is `Send + Sync` and is shared (by reference) across all rayon worker threads. Never compile the regex inside `scan_file` or `scan_content`.
 
-Helper regexes used in other modules (`snooze.rs`, `diff.rs`) are cached as `std::sync::LazyLock<Regex>` statics (stable since 1.80) so they are compiled at most once per process.
+Helper regexes used in other modules (`snooze.rs`, `diff.rs`) are cached as `std::sync::OnceLock<Regex>` statics so they are compiled at most once per process.
 
 ### Three-phase scan pipeline
 
 `scan()` is structured in three explicit phases:
 
 1. **Serial walk** — `WalkDir` collects candidate `(abs_path, rel_path)` pairs after applying exclude globs, extension filter, and binary detection.
-2. **Parallel scan** — `candidates.par_iter().map(scan_file)` via rayon. Each worker reads one file and returns `Vec<Annotation>`. No shared mutable state.
+2. **Parallel scan** — `candidates.par_iter().map(scan_file)` via rayon. Each worker reads one file and returns `Vec<Fuse>`. No shared mutable state.
 3. **Serial flatten + sort** — flatten the per-file vecs, sort by `NaiveDate` ascending.
 
 If you restructure `scan()`, preserve this boundary so the rayon step stays pure.
@@ -94,43 +119,43 @@ If you restructure `scan()`, preserve this boundary so the rayon step stays pure
 3. Fall back to `.timebomb.toml` in CWD.
 4. If no file found, use `Config::default()` silently.
 
-CLI flags (e.g. `--warn-within`, `--fail-on-warn`) are applied on top as `CliOverrides` after file loading. CLI always wins over file.
+CLI flags (e.g. `--fuse`, `--fail-on-ticking`) are applied on top as `CliOverrides` after file loading. CLI always wins over file.
 
 ### Exit codes
 
 | Code | Meaning |
 |------|---------|
-| 0 | No expired annotations |
-| 1 | One or more expired annotations found (or `--fail-on-warn` triggered, or ratchet exceeded) |
+| 0 | No detonated fuses (or counts within bunker/ceilings) |
+| 1 | Detonated fuses found, `--fail-on-ticking` triggered, or ratchet ceiling breached |
 | 2 | Configuration or runtime error |
 
-`list` and `fix` **always** exit 0 — they are informational/interactive. Only `check` uses exit code 1.
+`manifest` and `defuse` **always** exit 0 — they are informational/interactive. Only `sweep` uses exit code 1.
 
-### `fix` command — two-pass interactive resolution
+### `defuse` command — two-pass interactive resolution
 
-`fix` collects all user decisions in a first pass (interactive prompts), then applies them in a second pass bottom-up by descending line number per file. This avoids line-shift bugs that would occur if edits were applied during the prompt loop. It reuses `snooze::snooze_line` for Extend and `remove::remove_line` for Delete.
+`defuse` collects all user decisions in a first pass (interactive prompts: extend / delete / skip), then applies them in a second pass bottom-up by descending line number per file. This avoids line-shift bugs. It reuses `snooze::snooze_line` for Extend and `remove::remove_line` for Delete.
 
-### `--changed` mode — diff-aware filtering
+### `--since` mode — diff-aware filtering
 
-`check --changed --base <ref>` runs the normal scan, then filters results to annotations whose file+line appear in the changed line ranges returned by `diff::git_changed_line_ranges`. The diff parser (`parse_unified_diff`) is a pure function that takes a `git diff --unified=0` string and returns `HashMap<PathBuf, Vec<RangeInclusive<usize>>>`. Both staged and unstaged diffs are merged.
+`sweep --since <ref>` runs the normal scan, then filters results to fuses whose file+line appear in the changed line ranges returned by `diff::git_changed_line_ranges`. The diff parser (`parse_unified_diff`) is a pure function that takes a `git diff --unified=0` string and returns `HashMap<PathBuf, Vec<RangeInclusive<usize>>>`. Both staged and unstaged diffs are merged.
 
-### Baseline ratchet
+### Bunker ratchet
 
-`baseline save` writes `.timebomb-baseline.json` with the current expired and expiring-soon counts. `check` loads this file (if present) and calls `check_ratchet` — a pure function returning a `Vec<String>` of violation messages. Four independent checks: `max_expired` ceiling, `max_expiring_soon` ceiling, regression vs. baseline expired, regression vs. baseline expiring-soon. Any violation causes `check` to exit 1.
+`bunker save` writes `.timebomb-baseline.json` with the current detonated and ticking counts. `sweep` loads this file (if present) and calls `check_ratchet` — a pure function returning a `Vec<String>` of violation messages. Four independent checks: `max_detonated` ceiling, `max_ticking` ceiling, regression vs. baseline detonated, regression vs. baseline ticking. Any violation causes `sweep` to exit 1.
 
 ---
 
-## Annotation format
+## Fuse format
 
 ```
 // TODO[2026-06-01]: message
 # FIXME[2026-03-15][alice]: message with owner
 ```
 
-The regex (built in `Config::annotation_regex_pattern()`):
+The regex (built in `Config::fuse_regex_pattern()`):
 
 ```
-(?i)(TODO|FIXME|HACK|TEMP|REMOVEME)\[(\d{4}-\d{2}-\d{2})\](\[([^\]]+)\])?:\s*(.+)
+(?i)(TODO|FIXME|HACK|TEMP|REMOVEME|DEBT|STOPSHIP|WORKAROUND|DEPRECATED|BUG)\[(\d{4}-\d{2}-\d{2})\](\[([^\]]+)\])?:\s*(.+)
 ```
 
 Capture groups: `[1]` tag, `[2]` date, `[4]` optional owner, `[5]` message.
@@ -143,11 +168,15 @@ Plain `// TODO: fix this` comments (no bracket-date) are intentionally ignored.
 
 Fixture files in `tests/fixtures/` use **hardcoded, date-independent values**:
 
-- **Expired**: dates in 2018–2021 (always in the past)
-- **Expiring-soon**: dates in mid-2025 (treat as "recently expired" in tests; use a wide `warn_within` window)
-- **Future / OK**: dates in 2088 or 2099 (always in the future)
+- **Detonated**: dates in 2018–2021 (always in the past)
+- **Ticking**: dates in mid-2025 (use a wide `--fuse 30d` window in tests)
+- **Inert**: dates in 2088 or 2099 (always in the future)
 
-Never use relative dates like "30 days from today" in fixture files. Tests must not depend on the wall clock.
+Never use relative dates like "30 days from today" in fixture files. Tests must not depend on the wall clock. Each fixture file contributes 4 detonated, 1 ticking, and 2 inert fuses (except `sample.rs`, `sample.py`, `sample.sql` which have 6 detonated each).
+
+When adding a new fixture file:
+1. Add the extension to `default_extensions()` in `src/config.rs`.
+2. Update the `swept_files`, `detonated_count`, and `ticking_count` assertions in `tests/scanner_tests.rs`.
 
 ---
 
@@ -161,22 +190,29 @@ Three formats are supported, selected via `--format` or auto-detected:
 | `json` | `--format json` |
 | `github` | `--format github` or `GITHUB_ACTIONS=true` env var |
 
-GitHub Actions format emits `::error` and `::warning` annotation lines. Terminal format uses `colored` for red/yellow/green status prefixes.
+GitHub Actions format emits `::error` and `::warning` annotation lines. Terminal format uses `colored` for `DETONATED` (red) / `TICKING` (yellow) / `INERT` (green) prefixes.
+
+---
+
+## CI and releases
+
+CI runs on `ubuntu-24.04`. Jobs: `fmt` → `clippy` → `unit-tests` + `integration-tests` → `smoke-tests` → `self-check` → `release`.
+
+The `release` job uses `googleapis/release-please-action` and only runs on pushes to `main` after `smoke-tests` passes. It reads Conventional Commits to determine the version bump (`fix:` → patch, `feat:` → minor, `feat!:` / `BREAKING CHANGE:` → major), opens a release PR that bumps `Cargo.toml`, and creates the GitHub release on merge.
 
 ---
 
 ## Performance notes
 
-These were reviewed and addressed. Remaining known cost:
+Known remaining cost:
+- **`is_binary` runs serially in Phase 1** — every candidate file is opened once for binary detection, then again in Phase 2 via `fs::read`. The double-open is a known tradeoff.
 
-- **`is_binary` runs serially in Phase 1** — every candidate file is opened once for binary detection, then again in Phase 2 via `fs::read`. The double-open is a known tradeoff; moving binary detection into Phase 2 would require reading the full file before knowing whether to skip it.
-
-The following were already fixed:
+Already fixed:
 - Line-level `[` pre-filter in `scan_content` before the regex is applied
 - Allocations deferred until after date validation in `scan_content`
 - `OnceLock` caches for regexes in `snooze.rs` and `diff.rs`
-- Single-pass fold for expired/warning/ok counts in `output.rs`
-- Single-buffer file reconstruction in `snooze.rs` and `fix.rs` (no per-line `String` allocs)
+- Single-pass fold for detonated/ticking/inert counts in `output.rs`
+- Single-buffer file reconstruction in `snooze.rs` and `fix.rs`
 - `sort_unstable_by_key` for the final Phase 3 sort
 - `HashSet<&str>` instead of `HashSet<String>` for membership lookups in `trend.rs`
 - Iterator `.next()` instead of `collect::<Vec<_>>()` for two-field destructure in `blame.rs`
@@ -190,10 +226,10 @@ The following were already fixed:
 |-------|-----|
 | `clap` (derive) | Argument parsing with minimal boilerplate |
 | `walkdir` | Reliable, cross-platform recursive directory walking |
-| `regex` | Compiled, reusable annotation pattern matching |
+| `regex` | Compiled, reusable fuse pattern matching |
 | `chrono` | `NaiveDate` arithmetic for expiry calculation |
 | `toml` + `serde` | `.timebomb.toml` deserialization |
-| `serde_json` | JSON output format and baseline file I/O |
+| `serde_json` | JSON output format and bunker baseline file I/O |
 | `globset` | Fast glob matching for exclude patterns |
 | `colored` | Terminal color; respects `NO_COLOR` automatically |
 | `rayon` | Data-parallel file scanning in Phase 2 |
@@ -208,6 +244,7 @@ Do not add new dependencies without a clear justification. Prefer extending exis
 - **Do not call `std::process::exit` outside `main.rs`**. Library code must return `Result`; exit codes are resolved only at the top level.
 - **Do not fetch the current date inside the scanner**. Always use the injected `today: NaiveDate`.
 - **Do not compile the regex inside `scan_file` or `scan_content`**. It must be compiled once in `scan()` and passed by reference.
-- **Do not make `list` or `fix` exit non-zero**. They are informational/interactive only.
-- **Do not add language-specific parsers**. The scanner is intentionally language-agnostic — it matches tag patterns anywhere on a line regardless of comment syntax.
-- **Do not apply edits top-down in `fix` or `snooze`**. Always apply bottom-up (descending line number) to avoid line-shift bugs when multiple annotations are in the same file.
+- **Do not make `manifest` or `defuse` exit non-zero**. They are informational/interactive only.
+- **Do not add language-specific parsers**. The scanner is intentionally language-agnostic.
+- **Do not apply edits top-down in `defuse` or `delay`**. Always apply bottom-up (descending line number) to avoid line-shift bugs.
+- **Do not use old names**. The rename from `Annotation`/`expired`/`check`/`list`/`fix` to `Fuse`/`detonated`/`sweep`/`manifest`/`defuse` is complete. Do not reintroduce the old terminology.

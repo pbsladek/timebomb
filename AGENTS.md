@@ -63,10 +63,10 @@ When in doubt, assign agents to disjoint directories or disjoint files. `src/cli
 3. **Do not fetch `today` inside the scanner.** `NaiveDate` for "today" is always injected from `main.rs` and passed through. Tests depend on this.
 4. **Do not compile the regex inside `scan_file` or `scan_content`.** It is compiled once in `scan()` and passed by reference. Other module-local regexes are cached via `OnceLock`.
 5. **Do not call `std::process::exit` outside `main.rs`.** All library functions return `Result`.
-6. **`list` and `fix` must always exit 0.** Only `check` uses exit codes 1 and 2.
+6. **`manifest` and `defuse` must always exit 0.** Only `sweep` uses exit codes 1 and 2.
 7. **All tests must continue to pass.** Run `cargo test` and confirm before declaring a task done. Do not hardcode a specific test count here — it changes as features are added.
 8. **No new dependencies without justification.** See the dependency rationale table in `CLAUDE.md`.
-9. **Apply file edits bottom-up.** In `fix` and `snooze`, edits to a file must be applied in descending line-number order to avoid line-shift bugs when multiple annotations are modified in the same file.
+9. **Apply file edits bottom-up.** In `defuse` (`src/fix.rs`) and `delay` (`src/snooze.rs`), edits to a file must be applied in descending line-number order to avoid line-shift bugs when multiple fuses are modified in the same file.
 
 ---
 
@@ -123,7 +123,7 @@ Move `is_binary` into Phase 2 by replacing `std::fs::read_to_string` in `scan_fi
 | 6 | `sort_unstable_by_key` in Phase 3 | Low | ✅ Fixed |
 | 7 | `Vec::with_capacity(4)` in `scan_content` | Low | Open |
 | 8 | Remove `BufReader` from `is_binary` | Low | Open |
-| 9 | `regex::escape()` on tag names in `annotation_regex_pattern` | Low (correctness) | Open |
+| 9 | `regex::escape()` on tag names in `fuse_regex_pattern` | Low (correctness) | Open |
 
 ---
 
@@ -147,8 +147,8 @@ All three agents ran concurrently in the same working directory (non-overlapping
 | 3 | `trend.rs` | `HashSet<&str>` instead of `HashSet<String>` for `b_all_keys` — no key clones |
 | 4 | `fix.rs` | Single pre-allocated `String` buffer for file reconstruction instead of per-line `.to_string()` + `Vec<String>` |
 | 5 | `snooze.rs` | Same single-buffer approach in `run_snooze` |
-| 6 | `output.rs` | Single-pass `fold` for expired/warning/ok counts — three `Vec` allocations → zero |
-| 7 | `report.rs` | Single `for ann in &result.annotations` dispatch in `build_report` — three filter-collect Vecs eliminated |
+| 6 | `output.rs` | Single-pass `fold` for detonated/ticking/inert counts — three `Vec` allocations → zero |
+| 7 | `report.rs` | Single `for fuse in &result.fuses` dispatch in `build_report` — three filter-collect Vecs eliminated |
 | 8 | `scanner.rs` | Removed `fs::metadata` pre-check before `fs::read` in both `scan()` Phase 2 and `scan_file()` — 2 syscalls/file → 1 |
 | 9 | `blame.rs` | Iterator `.next()` calls instead of `split_whitespace().collect::<Vec<_>>()` for two-field destructure |
 | 10 | `stats.rs` | `char_indices().nth(18)` replaces `&name[..18]` byte-slice — correct for multi-byte UTF-8 |
@@ -160,9 +160,9 @@ All three agents ran concurrently in the same working directory (non-overlapping
 **Date:** 2026-03-22
 **Trigger:** Three product features were designed and approved for implementation simultaneously.
 **Agents:**
-- Agent (worktree `agent-a4e4d679`): `timebomb fix` — interactive expired annotation resolution (`src/fix.rs`, `tests/fix_tests.rs`)
-- Agent (worktree `agent-aade10ac`): `timebomb check --changed` — diff-aware filtering (`src/diff.rs`, `tests/diff_tests.rs`)
-- Agent (worktree `agent-aff3d16a`): `timebomb baseline` — ratchet enforcement (`src/baseline.rs`, `tests/baseline_tests.rs`)
+- Agent (worktree `agent-a4e4d679`): `timebomb defuse` — interactive detonated fuse resolution (`src/fix.rs`, `tests/fix_tests.rs`)
+- Agent (worktree `agent-aade10ac`): `timebomb sweep --changed` — diff-aware filtering (`src/diff.rs`, `tests/diff_tests.rs`)
+- Agent (worktree `agent-aff3d16a`): `timebomb bunker` — ratchet enforcement (`src/baseline.rs`, `tests/baseline_tests.rs`)
 
 Each agent ran in an isolated git worktree to prevent file-level conflicts. Shared coordination files (`src/cli.rs`, `src/main.rs`, `src/lib.rs`, `src/config.rs`) were modified by all three agents and merged without conflicts because the changes were additive and non-overlapping.
 
@@ -170,9 +170,9 @@ Each agent ran in an isolated git worktree to prevent file-level conflicts. Shar
 
 | Module | Command | Summary |
 |--------|---------|---------|
-| `src/fix.rs` | `timebomb fix` | Two-pass interactive loop: collect decisions (extend / delete / skip), then apply bottom-up by descending line per file |
-| `src/diff.rs` | `check --changed` | Pure `parse_unified_diff` function + `git_changed_line_ranges` which merges staged and unstaged diffs |
-| `src/baseline.rs` | `timebomb baseline save/show` | `Baseline` struct (serde), `load_baseline`, `check_ratchet` (pure, four independent checks), `run_baseline_save`, `run_baseline_show` |
+| `src/fix.rs` | `timebomb defuse` | Two-pass interactive loop: collect decisions (extend / delete / skip), then apply bottom-up by descending line per file |
+| `src/diff.rs` | `sweep --changed` | Pure `parse_unified_diff` function + `git_changed_line_ranges` which merges staged and unstaged diffs |
+| `src/baseline.rs` | `timebomb bunker save/show` | `Baseline` struct (serde), `load_baseline`, `check_ratchet` (pure, four independent checks), `run_baseline_save`, `run_baseline_show` |
 
 ---
 

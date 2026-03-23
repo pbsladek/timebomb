@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/pbsladek/timebomb/actions/workflows/ci.yml/badge.svg)](https://github.com/pbsladek/timebomb/actions/workflows/ci.yml)
 
-`timebomb` scans source code for structured expiry annotations and exits non-zero in CI when any deadline has passed.
+`timebomb` scans source code for structured expiry annotations and fails when any deadline has passed.
 
 The problem it solves: `// TODO: remove this after the migration` gets written with good intentions and stays forever. `timebomb` makes the deadline explicit and machine-enforceable. When the date passes, the build fails — forcing a fix or a conscious decision to extend the deadline.
 

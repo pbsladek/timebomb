@@ -106,11 +106,11 @@ impl From<regex::Error> for Error {
 /// Convenience result alias
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Maximum allowed value for `--warn-within` (10 years).
+/// Maximum allowed value for `--fuse` (10 years).
 ///
 /// Values beyond this are almost certainly mistakes (e.g. off-by-one on unit
 /// conversion) and would suppress all warnings across any realistic codebase.
-const MAX_WARN_WITHIN_DAYS: u32 = 3_650;
+const MAX_FUSE_DAYS: u32 = 3_650;
 
 /// Parse a duration string like "30d", "14d", "7d" into a number of days.
 /// Only day-based durations are supported.
@@ -123,10 +123,10 @@ pub fn parse_duration_days(s: &str) -> Result<u32> {
                 s
             ))
         })?;
-        if days > MAX_WARN_WITHIN_DAYS {
+        if days > MAX_FUSE_DAYS {
             return Err(Error::InvalidArgument(format!(
-                "'{}' exceeds the maximum allowed warn window of {}d (10 years)",
-                s, MAX_WARN_WITHIN_DAYS
+                "'{}' exceeds the maximum allowed fuse window of {}d (10 years)",
+                s, MAX_FUSE_DAYS
             )));
         }
         Ok(days)

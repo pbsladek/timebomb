@@ -1,8 +1,8 @@
-//! Logic for the `timebomb fix` subcommand.
+//! Logic for the `timebomb defuse` subcommand.
 //!
-//! Walks through each expired annotation interactively, prompting the user to
+//! Walks through each detonated fuse interactively, prompting the user to
 //! extend the date, delete the line, or skip it. After processing all
-//! annotations it prints a summary.
+//! fuses it prints a summary.
 
 use crate::annotation::Fuse;
 use crate::config::Config;
@@ -50,7 +50,7 @@ pub struct FixSummary {
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Core logic for `timebomb fix`.
+/// Core logic for `timebomb defuse`.
 ///
 /// Pass 1 — interactive: scan for expired annotations and prompt the user for
 /// each one.

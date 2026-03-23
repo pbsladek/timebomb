@@ -446,7 +446,7 @@ echo after\n\
         assert!(!output.contains(MARKER_END));
         assert!(output.contains("echo before"));
         assert!(output.contains("echo after"));
-        assert!(!output.contains("timebomb check"));
+        assert!(!output.contains("timebomb sweep"));
     }
 
     #[test]

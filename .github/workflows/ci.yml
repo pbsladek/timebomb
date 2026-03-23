@@ -124,37 +124,37 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Build release binary
         run: cargo build --release
-      - name: Smoke — check exits 0 on empty directory
+      - name: Smoke — sweep exits 0 on empty directory
         run: |
           set -euo pipefail
           mkdir -p "${{ runner.temp }}/smoke-empty"
-          ./target/release/timebomb check "${{ runner.temp }}/smoke-empty"
-      - name: Smoke — list always exits 0 even with expired annotation
+          ./target/release/timebomb sweep "${{ runner.temp }}/smoke-empty"
+      - name: Smoke — manifest always exits 0 even with detonated fuse
         run: |
           set -euo pipefail
           mkdir -p "${{ runner.temp }}/smoke-list"
           echo "// TODO[2020-01-01]: expired annotation" > "${{ runner.temp }}/smoke-list/test.rs"
-          ./target/release/timebomb list "${{ runner.temp }}/smoke-list"
-      - name: Smoke — check exits 1 when expired annotation found
+          ./target/release/timebomb manifest "${{ runner.temp }}/smoke-list"
+      - name: Smoke — sweep exits 1 when detonated fuse found
         run: |
           set -euo pipefail
           mkdir -p "${{ runner.temp }}/smoke-expired"
           echo "// TODO[2020-01-01]: this is expired" > "${{ runner.temp }}/smoke-expired/main.rs"
-          if ./target/release/timebomb check "${{ runner.temp }}/smoke-expired"; then
-            echo "ERROR: expected exit 1 for expired annotation" && exit 1
+          if ./target/release/timebomb sweep "${{ runner.temp }}/smoke-expired"; then
+            echo "ERROR: expected exit 1 for detonated fuse" && exit 1
           fi
       - name: Smoke — JSON output is valid JSON
         run: |
           set -euo pipefail
           mkdir -p "${{ runner.temp }}/smoke-json"
           echo "// FIXME[2020-01-01]: old" > "${{ runner.temp }}/smoke-json/lib.rs"
-          (./target/release/timebomb check "${{ runner.temp }}/smoke-json" --format json || true) | python3 -m json.tool > /dev/null
+          (./target/release/timebomb sweep "${{ runner.temp }}/smoke-json" --format json || true) | python3 -m json.tool > /dev/null
       - name: Smoke — GitHub Actions format emits workflow commands
         run: |
           set -euo pipefail
           mkdir -p "${{ runner.temp }}/smoke-gh"
           echo "// TODO[2020-01-01]: expired annotation" > "${{ runner.temp }}/smoke-gh/main.rs"
-          output=$(./target/release/timebomb check "${{ runner.temp }}/smoke-gh" --format github || true)
+          output=$(./target/release/timebomb sweep "${{ runner.temp }}/smoke-gh" --format github || true)
           echo "$output" | grep -q "::error" || (echo "Expected ::error annotation" && exit 1)
       - name: Upload release binary
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -180,9 +180,9 @@ jobs:
       - name: Make binary executable
         run: chmod +x target/release/timebomb
       - name: Scan src/ with GitHub Actions format
-        run: ./target/release/timebomb check ./src --format github || true
-      - name: List all annotations sorted by date
-        run: ./target/release/timebomb list ./src || true
+        run: ./target/release/timebomb sweep ./src --format github || true
+      - name: List all fuses sorted by date
+        run: ./target/release/timebomb manifest ./src || true
 
   release:
     name: Release
