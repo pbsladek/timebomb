@@ -395,10 +395,11 @@ fn test_scan_fixtures_dir_finds_all_files() {
 
     let result = scan(&dir, &cfg, today()).unwrap();
 
-    // We have 3 fixture files (sample.rs, sample.py, sample.sql)
+    // 24 fixture files: rs, py, sql, ts, rb, go, js, hs, fs, cs, java, php, clj, lisp, rkt,
+    //                    ex, erl, c, cpp, d, swift, ml, lua, dart
     assert_eq!(
-        result.scanned_files, 3,
-        "expected 3 scanned files in fixtures dir, got {}",
+        result.scanned_files, 24,
+        "expected 24 scanned files in fixtures dir, got {}",
         result.scanned_files
     );
 }
@@ -420,11 +421,10 @@ fn test_scan_fixtures_dir_total_expired_count() {
     let cfg = default_config();
     let result = scan(&dir, &cfg, today()).unwrap();
 
-    // 6 expired per file × 3 files = 18 total expired
     let expired_count = result.expired().len();
     assert_eq!(
-        expired_count, 18,
-        "expected 18 total expired annotations across all fixture files, got {}",
+        expired_count, 96,
+        "expected 96 total expired annotations across all fixture files, got {}",
         expired_count
     );
 }
@@ -450,11 +450,11 @@ fn test_scan_fixtures_dir_expiring_soon_with_wide_window() {
     let cfg = config_with_warn(30);
     let result = scan(&dir, &cfg, today()).unwrap();
 
-    // Each fixture file has 2 expiring-soon items × 3 files = 6
+    // rs/py/go/js/ts: 2 each; rb/hs/fs/cs/java/php/clj/lisp/rkt/ex/erl/c/cpp/d: 1 each; sql: 0
     let soon_count = result.expiring_soon().len();
     assert_eq!(
-        soon_count, 6,
-        "expected 6 expiring-soon annotations with 30d window across fixture files, got {}",
+        soon_count, 28,
+        "expected 28 expiring-soon annotations with 30d window across fixture files, got {}",
         soon_count
     );
 }

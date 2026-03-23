@@ -28,7 +28,7 @@ write-fixture = mkdir -p "$(SMOKE_DIR)/$(1)" && \
 
 .PHONY: help \
         build build-release build-dist \
-        test-unit test-integration test test-nocapture bench \
+        test-unit test-integration test test-nocapture bench bench-no-run \
         fmt fmt-check clippy lint \
         smoke smoke-empty smoke-list smoke-expired smoke-json smoke-github smoke-clean \
         check ci self-check self-list run \
@@ -69,8 +69,11 @@ test: test-unit test-integration  ## Run all tests (unit + integration)
 test-nocapture:  ## Run all tests showing eprintln! output
 	$(CARGO) test -- --nocapture
 
-bench:  ## Run criterion benchmarks (outputs to target/criterion/)
-	$(CARGO) bench
+bench:  ## Run criterion benchmarks and print a formatted summary table. Pass TIME=<secs> to change measurement time per bench (default: 5)
+	@./benches/bench.sh $(if $(TIME),--time $(TIME),)
+
+bench-no-run:  ## Reformat last saved benchmark results without re-running
+	@./benches/bench.sh --no-run
 
 ##@ Lint
 

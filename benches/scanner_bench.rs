@@ -1,11 +1,11 @@
 use chrono::NaiveDate;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::time::Duration;
 use std::io::Write;
 use std::path::Path;
 use tempfile::{NamedTempFile, TempDir};
 use timebomb::config::{CliOverrides, Config};
 use timebomb::diff::parse_unified_diff;
-use timebomb::output::{print_github, print_json, print_terminal};
 use timebomb::scanner::{build_regex, is_binary, scan, scan_content, scan_str};
 use timebomb::snooze::{append_reason, snooze_line};
 
@@ -405,46 +405,6 @@ fn bench_parse_unified_diff(c: &mut Criterion) {
     group.finish();
 }
 
-// ── output formatter benchmarks ───────────────────────────────────────────────
-
-fn build_scan_result_for_output(annotation_count: usize) -> timebomb::scanner::ScanResult {
-    let cfg = default_config();
-    let today = fixed_today();
-    let total = annotation_count * 10;
-    let content = build_content(total, 10);
-    let path = Path::new("bench/big.rs");
-    let regex = build_regex(&cfg).unwrap();
-    let annotations = scan_content(&content, path, &regex, &cfg, today).unwrap();
-    timebomb::scanner::ScanResult {
-        annotations,
-        scanned_files: 1,
-        skipped_files: 0,
-    }
-}
-
-fn bench_output_formatters(c: &mut Criterion) {
-    let result_100 = build_scan_result_for_output(100);
-    let result_500 = build_scan_result_for_output(500);
-
-    let mut group = c.benchmark_group("output_formatters");
-
-    group.throughput(Throughput::Elements(100));
-    group.bench_function("terminal_100", |b| {
-        b.iter(|| print_terminal(&result_100, 7, false))
-    });
-    group.bench_function("json_100", |b| b.iter(|| print_json(&result_100)));
-    group.bench_function("github_100", |b| b.iter(|| print_github(&result_100, 7)));
-
-    group.throughput(Throughput::Elements(500));
-    group.bench_function("terminal_500", |b| {
-        b.iter(|| print_terminal(&result_500, 7, false))
-    });
-    group.bench_function("json_500", |b| b.iter(|| print_json(&result_500)));
-    group.bench_function("github_500", |b| b.iter(|| print_github(&result_500, 7)));
-
-    group.finish();
-}
-
 // ── snooze_line / append_reason micro-benchmarks ──────────────────────────────
 
 fn bench_snooze_line(c: &mut Criterion) {
@@ -530,23 +490,27 @@ fn bench_rayon_scaling(c: &mut Criterion) {
 
 // ── registration ─────────────────────────────────────────────────────────────
 
-criterion_group!(
-    benches,
-    bench_scan_content_no_annotations,
-    bench_scan_content_sparse,
-    bench_scan_content_density,
-    bench_scan_content_dense,
-    bench_scan_str_includes_regex_compile,
-    bench_build_regex,
-    bench_is_binary,
-    bench_per_line_regex,
-    bench_annotation_regex_pattern,
-    bench_scan_end_to_end,
-    bench_parse_unified_diff,
-    bench_output_formatters,
-    bench_snooze_line,
-    bench_append_reason,
-    bench_load_config,
-    bench_rayon_scaling,
-);
+criterion_group! {
+    name = benches;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_secs(1))
+        .measurement_time(Duration::from_secs(5))
+        .sample_size(50);
+    targets =
+        bench_scan_content_no_annotations,
+        bench_scan_content_sparse,
+        bench_scan_content_density,
+        bench_scan_content_dense,
+        bench_scan_str_includes_regex_compile,
+        bench_build_regex,
+        bench_is_binary,
+        bench_per_line_regex,
+        bench_annotation_regex_pattern,
+        bench_scan_end_to_end,
+        bench_parse_unified_diff,
+        bench_snooze_line,
+        bench_append_reason,
+        bench_load_config,
+        bench_rayon_scaling,
+}
 criterion_main!(benches);
