@@ -1,0 +1,18 @@
+# Changelog
+
+## 0.1.0 (2026-03-23)
+
+
+### Features
+
+* **cli:** add hook/trend commands and git blame annotation enrichment ([ad9b810](https://github.com/pbsladek/timebomb/commit/ad9b810e2a1280cbb70957a08197206872aec414))
+* **cli:** add init and report commands, scanner benchmarks ([f21e2fb](https://github.com/pbsladek/timebomb/commit/f21e2fbdea27b9929dd100308730871526bc5961))
+* **cli:** add interactive fix, baseline management, and diff filtering ([e0f4ce0](https://github.com/pbsladek/timebomb/commit/e0f4ce0bafea995e625b87f0f46e047b27426a28))
+* **cli:** add snooze and remove commands; enhance add; implement CI/CD ([c2a028e](https://github.com/pbsladek/timebomb/commit/c2a028e967e5d66497488d91e05886851aec5d6f))
+* **lang:** add extensions and fixtures; refactor bench execution output ([c72fec3](https://github.com/pbsladek/timebomb/commit/c72fec33c06d628ad4872168390371ba031ba08d))
+* **project:** add timebomb CLI, config, CI, docs, and tests ([5e99b39](https://github.com/pbsladek/timebomb/commit/5e99b3988960d727d65b54bcb2ec551e13929500))
+
+
+### Performance Improvements
+
+* **bench:** add scan, diff, and output benchmarks; improve CI JSON check ([a2e423d](https://github.com/pbsladek/timebomb/commit/a2e423da6834fc0e54281d0d08ab68eed0359cd1))
