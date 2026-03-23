@@ -22,6 +22,14 @@ pub struct ConfigFile {
     /// File extensions to scan. If empty/absent, scan all text files.
     #[serde(default)]
     pub extensions: Option<Vec<String>>,
+
+    /// Ratchet: fail if the number of expired annotations exceeds this limit.
+    #[serde(default)]
+    pub max_expired: Option<usize>,
+
+    /// Ratchet: fail if the number of expiring-soon annotations exceeds this limit.
+    #[serde(default)]
+    pub max_expiring_soon: Option<usize>,
 }
 
 /// Fully-resolved configuration after merging the config file with CLI overrides.
@@ -36,6 +44,10 @@ pub struct Config {
     /// If Some, only scan files whose relative path is in this set (--since git-diff mode).
     /// None means scan all files (normal mode).
     pub diff_files: Option<std::collections::HashSet<std::path::PathBuf>>,
+    /// Ratchet: fail if the number of expired annotations exceeds this limit.
+    pub max_expired: Option<usize>,
+    /// Ratchet: fail if the number of expiring-soon annotations exceeds this limit.
+    pub max_expiring_soon: Option<usize>,
 }
 
 impl Default for Config {
@@ -47,6 +59,8 @@ impl Default for Config {
             extensions: default_extensions(),
             fail_on_warn: false,
             diff_files: None,
+            max_expired: None,
+            max_expiring_soon: None,
         }
     }
 }
@@ -156,6 +170,9 @@ fn merge_config(file_cfg: Option<ConfigFile>, overrides: &CliOverrides) -> Resul
         .and_then(|c| c.extensions.clone())
         .unwrap_or(defaults.extensions);
 
+    let max_expired = file_cfg.as_ref().and_then(|c| c.max_expired);
+    let max_expiring_soon = file_cfg.as_ref().and_then(|c| c.max_expiring_soon);
+
     // Apply CLI overrides
     if let Some(ref w) = overrides.warn_within {
         warn_within_days = parse_duration_days(w)?;
@@ -168,6 +185,8 @@ fn merge_config(file_cfg: Option<ConfigFile>, overrides: &CliOverrides) -> Resul
         extensions,
         fail_on_warn: overrides.fail_on_warn,
         diff_files: None,
+        max_expired,
+        max_expiring_soon,
     })
 }
 
@@ -265,6 +284,8 @@ mod tests {
             warn_within_days: Some(7),
             exclude: None,
             extensions: None,
+            max_expired: None,
+            max_expiring_soon: None,
         };
         let cfg = merge_config(Some(file_cfg), &CliOverrides::default()).unwrap();
         assert_eq!(cfg.tags, vec!["TODO", "FIXME"]);
@@ -294,6 +315,8 @@ mod tests {
             warn_within_days: Some(7),
             exclude: None,
             extensions: None,
+            max_expired: None,
+            max_expiring_soon: None,
         };
         let overrides = CliOverrides::new(Some("30d".to_string()), false);
         let cfg = merge_config(Some(file_cfg), &overrides).unwrap();

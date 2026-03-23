@@ -54,11 +54,12 @@ pub fn compute_trend(a: &Report, b: &Report) -> TrendResult {
     let b_ok_keys = key_set(&b.ok);
 
     // All keys that exist anywhere in B.
-    let b_all_keys: HashSet<String> = b_expired_keys
+    // Use &str references into the already-owned keys to avoid cloning them again.
+    let b_all_keys: HashSet<&str> = b_expired_keys
         .iter()
         .chain(b_expiring_soon_keys.iter())
         .chain(b_ok_keys.iter())
-        .cloned()
+        .map(String::as_str)
         .collect();
 
     let newly_expired: Vec<ReportAnnotation> = b
@@ -71,7 +72,7 @@ pub fn compute_trend(a: &Report, b: &Report) -> TrendResult {
     let resolved: Vec<ReportAnnotation> = a
         .expired
         .iter()
-        .filter(|ann| !b_all_keys.contains(&annotation_key(ann)))
+        .filter(|ann| !b_all_keys.contains(annotation_key(ann).as_str()))
         .cloned()
         .collect();
 

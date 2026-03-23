@@ -53,10 +53,18 @@ pub fn print_terminal(result: &ScanResult, warn_within_days: u32, show_ok: bool)
         print_annotation_terminal(ann, warn_within_days, use_color, show_ok);
     }
 
-    // Summary line
-    let expired_count = result.expired().len();
-    let soon_count = result.expiring_soon().len();
-    let ok_count = result.ok().len();
+    // Summary line — single pass to avoid three Vec allocations just for counts.
+    let (expired_count, soon_count, ok_count) =
+        result
+            .annotations
+            .iter()
+            .fold((0usize, 0usize, 0usize), |(e, w, o), ann| {
+                match ann.status {
+                    Status::Expired => (e + 1, w, o),
+                    Status::ExpiringSoon => (e, w + 1, o),
+                    Status::Ok => (e, w, o + 1),
+                }
+            });
 
     println!();
     let summary = format!(

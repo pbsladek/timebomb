@@ -123,9 +123,16 @@ pub fn compute_stats(annotations: &[Annotation]) -> StatsResult {
 
 /// Truncate a name to fit within 20 chars (left-aligned).
 /// If the name is longer than 18 chars, truncate to 18 and append "..".
+/// Uses char-safe truncation to avoid panicking on multi-byte UTF-8 characters.
 fn truncate_name(name: &str) -> String {
-    if name.len() > 18 {
-        format!("{}..", &name[..18])
+    if name.chars().count() > 18 {
+        // Find the byte offset of the 18th char boundary so we can slice safely.
+        let end = name
+            .char_indices()
+            .nth(18)
+            .map(|(i, _)| i)
+            .unwrap_or(name.len());
+        format!("{}..", &name[..end])
     } else {
         name.to_string()
     }

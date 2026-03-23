@@ -41,6 +41,12 @@ pub enum Command {
 
     /// Compare two report JSON snapshots and show annotation debt trajectory
     Trend(TrendArgs),
+
+    /// Interactively fix expired annotations: extend, delete, or skip each one
+    Fix(FixArgs),
+
+    /// Save or show the annotation count baseline for ratchet enforcement
+    Baseline(BaselineArgs),
 }
 
 /// Arguments for the `check` subcommand.
@@ -73,6 +79,14 @@ pub struct CheckArgs {
     /// Enrich annotations without an explicit owner with git blame author
     #[arg(long)]
     pub blame: bool,
+
+    /// Only report annotations on lines changed in the git diff
+    #[arg(long, default_value_t = false)]
+    pub changed: bool,
+
+    /// Base ref for --changed (default: HEAD)
+    #[arg(long, value_name = "REF", requires = "changed")]
+    pub base: Option<String>,
 }
 
 /// Arguments for the `list` subcommand.
@@ -262,6 +276,78 @@ pub struct TrendArgs {
     /// Output format
     #[arg(long, value_name = "FORMAT")]
     pub format: Option<FormatArg>,
+}
+
+/// Arguments for the `fix` subcommand.
+#[derive(Debug, clap::Args)]
+pub struct FixArgs {
+    /// Directory to scan (default: current directory)
+    #[arg(default_value = ".")]
+    pub path: String,
+
+    /// Path to config file (default: .timebomb.toml in scan root or cwd)
+    #[arg(long, value_name = "FILE")]
+    pub config: Option<String>,
+
+    /// Warn-within threshold used for status classification (e.g. "14d")
+    #[arg(long, value_name = "DURATION")]
+    pub warn_within: Option<String>,
+}
+
+/// Arguments for the `baseline` subcommand.
+#[derive(Debug, clap::Args)]
+pub struct BaselineArgs {
+    #[command(subcommand)]
+    pub command: BaselineCommand,
+}
+
+/// Subcommands under `baseline`.
+#[derive(Debug, Subcommand)]
+pub enum BaselineCommand {
+    /// Record current annotation counts as the baseline
+    Save(BaselineSaveArgs),
+    /// Compare current counts against the saved baseline
+    Show(BaselineShowArgs),
+}
+
+/// Arguments for `baseline save`.
+#[derive(Debug, clap::Args)]
+pub struct BaselineSaveArgs {
+    /// Path to scan (default: current directory)
+    #[arg(default_value = ".")]
+    pub path: String,
+
+    /// Path to config file (default: .timebomb.toml in scan root or cwd)
+    #[arg(long, value_name = "FILE")]
+    pub config: Option<String>,
+
+    /// Path to the baseline file to write
+    #[arg(long, default_value = ".timebomb-baseline.json", value_name = "FILE")]
+    pub baseline_file: String,
+
+    /// Warn-within threshold used for status classification (e.g. "14d")
+    #[arg(long, value_name = "DURATION")]
+    pub warn_within: Option<String>,
+}
+
+/// Arguments for `baseline show`.
+#[derive(Debug, clap::Args)]
+pub struct BaselineShowArgs {
+    /// Path to scan (default: current directory)
+    #[arg(default_value = ".")]
+    pub path: String,
+
+    /// Path to config file (default: .timebomb.toml in scan root or cwd)
+    #[arg(long, value_name = "FILE")]
+    pub config: Option<String>,
+
+    /// Path to the baseline file to read
+    #[arg(long, default_value = ".timebomb-baseline.json", value_name = "FILE")]
+    pub baseline_file: String,
+
+    /// Warn-within threshold used for status classification (e.g. "14d")
+    #[arg(long, value_name = "DURATION")]
+    pub warn_within: Option<String>,
 }
 
 /// The --by flag value for `stats`.

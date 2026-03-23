@@ -133,22 +133,22 @@ pub fn scan(root: &Path, config: &Config, today: NaiveDate) -> Result<ScanResult
     let results: Result<Vec<Vec<Annotation>>> = candidates
         .par_iter()
         .map(|c| {
-            // Reject oversized files before reading to prevent memory exhaustion.
-            let file_len = std::fs::metadata(&c.abs_path).map(|m| m.len()).unwrap_or(0);
-            if file_len > MAX_FILE_BYTES {
-                eprintln!(
-                    "warning: skipping '{}': file size ({} MiB) exceeds {} MiB limit",
-                    c.rel_path.display(),
-                    file_len / 1_024 / 1_024,
-                    MAX_FILE_BYTES / 1_024 / 1_024,
-                );
-                binary_count.fetch_add(1, Ordering::Relaxed);
-                return Ok(vec![]);
-            }
             let bytes = std::fs::read(&c.abs_path).map_err(|e| Error::Io {
                 source: e,
                 path: Some(c.abs_path.clone()),
             })?;
+            // Reject oversized files to avoid processing giant blobs; check after
+            // read so we only make one syscall instead of stat + read.
+            if bytes.len() as u64 > MAX_FILE_BYTES {
+                eprintln!(
+                    "warning: skipping '{}': file size ({} MiB) exceeds {} MiB limit",
+                    c.rel_path.display(),
+                    bytes.len() / 1_024 / 1_024,
+                    MAX_FILE_BYTES as usize / 1_024 / 1_024,
+                );
+                binary_count.fetch_add(1, Ordering::Relaxed);
+                return Ok(vec![]);
+            }
             // Binary detection: a null byte means this is not a text file.
             if bytes.contains(&0u8) {
                 binary_count.fetch_add(1, Ordering::Relaxed);
@@ -196,19 +196,19 @@ pub fn scan_file(
     config: &Config,
     today: NaiveDate,
 ) -> Result<Vec<Annotation>> {
-    let file_len = std::fs::metadata(abs_path).map(|m| m.len()).unwrap_or(0);
-    if file_len > MAX_FILE_BYTES {
-        return Err(Error::InvalidArgument(format!(
-            "file '{}' ({} MiB) exceeds the {} MiB scan limit",
-            rel_path.display(),
-            file_len / 1_024 / 1_024,
-            MAX_FILE_BYTES / 1_024 / 1_024,
-        )));
-    }
     let bytes = std::fs::read(abs_path).map_err(|e| Error::Io {
         source: e,
         path: Some(abs_path.to_path_buf()),
     })?;
+    // Check size after read — one syscall instead of stat + read.
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(Error::InvalidArgument(format!(
+            "file '{}' ({} MiB) exceeds the {} MiB scan limit",
+            rel_path.display(),
+            bytes.len() / 1_024 / 1_024,
+            MAX_FILE_BYTES as usize / 1_024 / 1_024,
+        )));
+    }
     if bytes.contains(&0u8) {
         return Ok(vec![]);
     }

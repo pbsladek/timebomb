@@ -6,7 +6,6 @@
 use crate::add::{find_matching_lines, parse_target};
 use crate::error::{Error, Result};
 use chrono::{Duration, NaiveDate};
-use regex::Regex;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
@@ -105,12 +104,18 @@ pub fn run_snooze(
     };
 
     // 8. Reconstruct the full file -------------------------------------------
-    let mut new_lines: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-    new_lines[line_number - 1] = new_line.clone();
-    let mut new_content = new_lines.join("\n");
-    // Preserve trailing newline if the original had one
-    if content.ends_with('\n') {
+    let mut new_content = String::with_capacity(content.len() + new_line.len());
+    for (i, line) in lines.iter().enumerate() {
+        if i == line_number - 1 {
+            new_content.push_str(&new_line);
+        } else {
+            new_content.push_str(line);
+        }
         new_content.push('\n');
+    }
+    // Preserve the original file's trailing newline behaviour
+    if !content.ends_with('\n') {
+        new_content.pop();
     }
 
     // 9. Print before/after diff ---------------------------------------------
@@ -244,9 +249,15 @@ pub fn resolve_new_date(
 ///
 /// Only the FIRST bracketed date is replaced (the expiry date), not any
 /// subsequent bracket (e.g. an owner bracket like `[alice]`).
+fn date_bracket_re() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r"\[(\d{4}-\d{2}-\d{2})\]").expect("hardcoded regex is valid")
+    })
+}
+
 pub fn snooze_line(line: &str, new_date: NaiveDate) -> Option<String> {
-    // We compile the regex each call — for a CLI tool this is fine.
-    let re = Regex::new(r"\[(\d{4}-\d{2}-\d{2})\]").expect("hardcoded regex is valid");
+    let re = date_bracket_re();
 
     let mat = re.find(line)?;
 

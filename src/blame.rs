@@ -82,13 +82,15 @@ fn parse_blame_porcelain(output: &str) -> HashMap<usize, BlameInfo> {
             continue;
         }
         // rest starts with a space; fields are <orig> <final> [<count>]
-        let parts: Vec<&str> = rest.split_whitespace().collect();
-        if parts.len() < 2 {
-            continue;
-        }
-        let final_line: usize = match parts[1].parse() {
-            Ok(n) => n,
-            Err(_) => continue,
+        // Use .next() to avoid collecting into a Vec just to read two elements.
+        let mut parts = rest.split_whitespace();
+        let _orig = match parts.next() {
+            Some(v) => v,
+            None => continue,
+        };
+        let final_line: usize = match parts.next().and_then(|v| v.parse().ok()) {
+            Some(n) => n,
+            None => continue,
         };
 
         // Consume metadata lines until we hit the `\t` content line.

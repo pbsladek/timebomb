@@ -20,7 +20,7 @@ pub fn is_git_repo(path: &Path) -> bool {
 /// Permits alphanumerics plus `.`, `/`, `-`, `_` — the characters needed for
 /// branch names, tags, and SHAs.  Rejects leading `--` (option injection) and
 /// any special git syntax characters (`@`, `^`, `~`, `:`).
-fn validate_git_ref(git_ref: &str) -> Result<()> {
+pub fn validate_git_ref(git_ref: &str) -> Result<()> {
     if git_ref.is_empty() {
         return Err(Error::InvalidArgument(
             "git ref must not be empty".to_string(),

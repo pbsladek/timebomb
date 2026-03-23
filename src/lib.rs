@@ -1,9 +1,12 @@
 pub mod add;
 pub mod annotation;
+pub mod baseline;
 pub mod blame;
 pub mod cli;
 pub mod config;
+pub mod diff;
 pub mod error;
+pub mod fix;
 pub mod git;
 pub mod hook;
 pub mod output;

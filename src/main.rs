@@ -1,8 +1,11 @@
 use timebomb::add::run_add;
 use timebomb::annotation;
+use timebomb::baseline;
 use timebomb::blame::enrich_with_blame;
 use timebomb::config::{self, load_config, CliOverrides};
+use timebomb::diff;
 use timebomb::error::{parse_duration_days, Error};
+use timebomb::fix;
 use timebomb::git::{git_changed_files, is_git_repo};
 use timebomb::hook;
 use timebomb::output::{print_list, print_scan_result, OutputFormat};
@@ -16,7 +19,7 @@ use chrono::Local;
 use clap::Parser;
 use std::path::{Path, PathBuf};
 use std::process;
-use timebomb::cli::{Cli, Command, HookCommand};
+use timebomb::cli::{BaselineCommand, Cli, Command, HookCommand};
 
 fn main() {
     let cli = Cli::parse();
@@ -64,7 +67,36 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 enrich_with_blame(&mut result.annotations, &scan_path);
             }
 
+            // --changed: retain only annotations that fall on lines modified in the git diff.
+            if args.changed {
+                let base = args.base.as_deref().unwrap_or("HEAD");
+                let line_ranges = diff::git_changed_line_ranges(&scan_path, base)?;
+                result.annotations.retain(|ann| {
+                    line_ranges
+                        .get(&ann.file)
+                        .map(|ranges| ranges.iter().any(|r| r.contains(&ann.line)))
+                        .unwrap_or(false)
+                });
+            }
+
             print_scan_result(&result, &format, cfg.warn_within_days);
+
+            // Ratchet check: compare counts against saved baseline and/or config limits.
+            let baseline_path = scan_path.join(".timebomb-baseline.json");
+            let loaded_baseline = baseline::load_baseline(&baseline_path)?;
+            let violations = baseline::check_ratchet(
+                result.expired().len(),
+                result.expiring_soon().len(),
+                loaded_baseline.as_ref(),
+                cfg.max_expired,
+                cfg.max_expiring_soon,
+            );
+            if !violations.is_empty() {
+                for v in &violations {
+                    eprintln!("ratchet: {v}");
+                }
+                return Ok(1);
+            }
 
             if result.has_expired() {
                 return Ok(1);
@@ -186,6 +218,37 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 &format,
             )
         }
+
+        Command::Fix(args) => {
+            let scan_path = canonicalize_path(Path::new(&args.path))?;
+            let overrides = CliOverrides::new(args.warn_within.clone(), false);
+            let cfg = resolve_config(args.config.as_deref(), &scan_path, &overrides)?;
+            let summary = fix::run_fix(&scan_path, &cfg, today)?;
+            println!(
+                "\nExtended: {}  Deleted: {}  Skipped: {}",
+                summary.extended, summary.deleted, summary.skipped
+            );
+            Ok(0)
+        }
+
+        Command::Baseline(args) => match args.command {
+            BaselineCommand::Save(a) => {
+                let scan_path = canonicalize_path(Path::new(&a.path))?;
+                let overrides = CliOverrides::new(a.warn_within.clone(), false);
+                let cfg = resolve_config(a.config.as_deref(), &scan_path, &overrides)?;
+                let baseline_path = Path::new(&a.baseline_file);
+                // Use the full RFC 3339 timestamp from the local clock, not just the date.
+                let generated_at = Local::now().to_rfc3339();
+                baseline::run_baseline_save(&scan_path, &cfg, today, baseline_path, &generated_at)
+            }
+            BaselineCommand::Show(a) => {
+                let scan_path = canonicalize_path(Path::new(&a.path))?;
+                let overrides = CliOverrides::new(a.warn_within.clone(), false);
+                let cfg = resolve_config(a.config.as_deref(), &scan_path, &overrides)?;
+                let baseline_path = Path::new(&a.baseline_file);
+                baseline::run_baseline_show(&scan_path, &cfg, today, baseline_path)
+            }
+        },
     }
 }
 
@@ -273,6 +336,8 @@ fn merge_file_config(
         extensions,
         fail_on_warn: overrides.fail_on_warn,
         diff_files: None,
+        max_expired: file_cfg.max_expired,
+        max_expiring_soon: file_cfg.max_expiring_soon,
     })
 }
 
@@ -500,6 +565,8 @@ mod tests {
             warn_within_days: Some(7),
             exclude: None,
             extensions: None,
+            max_expired: None,
+            max_expiring_soon: None,
         };
         let overrides = CliOverrides::default();
         let cfg = merge_file_config(file_cfg, &overrides).unwrap();
@@ -514,6 +581,8 @@ mod tests {
             warn_within_days: Some(7),
             exclude: None,
             extensions: None,
+            max_expired: None,
+            max_expiring_soon: None,
         };
         let overrides = CliOverrides::new(Some("30d".to_string()), false);
         let cfg = merge_file_config(file_cfg, &overrides).unwrap();

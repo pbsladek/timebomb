@@ -105,13 +105,18 @@ pub fn build_report(result: &ScanResult, generated_at: &str) -> Report {
         status: a.status.as_str().to_string(),
     };
 
-    let expired: Vec<ReportAnnotation> = result.expired().into_iter().map(to_report_ann).collect();
-    let expiring_soon: Vec<ReportAnnotation> = result
-        .expiring_soon()
-        .into_iter()
-        .map(to_report_ann)
-        .collect();
-    let ok: Vec<ReportAnnotation> = result.ok().into_iter().map(to_report_ann).collect();
+    // Single pass over annotations — avoids three separate Vec allocations from
+    // calling result.expired() / result.expiring_soon() / result.ok() individually.
+    let mut expired: Vec<ReportAnnotation> = Vec::new();
+    let mut expiring_soon: Vec<ReportAnnotation> = Vec::new();
+    let mut ok: Vec<ReportAnnotation> = Vec::new();
+    for ann in &result.annotations {
+        match ann.status {
+            crate::annotation::Status::Expired => expired.push(to_report_ann(ann)),
+            crate::annotation::Status::ExpiringSoon => expiring_soon.push(to_report_ann(ann)),
+            crate::annotation::Status::Ok => ok.push(to_report_ann(ann)),
+        }
+    }
 
     let total_annotations = expired.len() + expiring_soon.len() + ok.len();
 

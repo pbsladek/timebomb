@@ -97,29 +97,11 @@ fn bench_scan_content_no_annotations(c: &mut Criterion) {
     group.throughput(Throughput::Elements(10_000));
 
     group.bench_function("no_bracket_10k_lines", |b| {
-        b.iter(|| {
-            scan_content(
-                &content_no_bracket,
-                path,
-                &regex,
-                &cfg,
-                today,
-            )
-            .unwrap()
-        })
+        b.iter(|| scan_content(&content_no_bracket, path, &regex, &cfg, today).unwrap())
     });
 
     group.bench_function("bracket_no_annotation_10k_lines", |b| {
-        b.iter(|| {
-            scan_content(
-                &content_bracket,
-                path,
-                &regex,
-                &cfg,
-                today,
-            )
-            .unwrap()
-        })
+        b.iter(|| scan_content(&content_bracket, path, &regex, &cfg, today).unwrap())
     });
 
     group.finish();
@@ -138,16 +120,7 @@ fn bench_scan_content_sparse(c: &mut Criterion) {
     group.throughput(Throughput::Elements(10_000));
 
     group.bench_function("5_annotations_10k_lines", |b| {
-        b.iter(|| {
-            scan_content(
-                &content,
-                path,
-                &regex,
-                &cfg,
-                today,
-            )
-            .unwrap()
-        })
+        b.iter(|| scan_content(&content, path, &regex, &cfg, today).unwrap())
     });
 
     group.finish();
@@ -176,18 +149,7 @@ fn bench_scan_content_density(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::from_parameter(label),
             &content,
-            |b, content| {
-                b.iter(|| {
-                    scan_content(
-                        content,
-                        path,
-                        &regex,
-                        &cfg,
-                        today,
-                    )
-                    .unwrap()
-                })
-            },
+            |b, content| b.iter(|| scan_content(content, path, &regex, &cfg, today).unwrap()),
         );
     }
 
@@ -208,30 +170,12 @@ fn bench_scan_content_dense(c: &mut Criterion) {
 
     group.throughput(Throughput::Elements(500));
     group.bench_function("every_line_500_lines", |b| {
-        b.iter(|| {
-            scan_content(
-                &content_500,
-                path,
-                &regex,
-                &cfg,
-                today,
-            )
-            .unwrap()
-        })
+        b.iter(|| scan_content(&content_500, path, &regex, &cfg, today).unwrap())
     });
 
     group.throughput(Throughput::Elements(2_000));
     group.bench_function("every_line_2k_lines", |b| {
-        b.iter(|| {
-            scan_content(
-                &content_2000,
-                path,
-                &regex,
-                &cfg,
-                today,
-            )
-            .unwrap()
-        })
+        b.iter(|| scan_content(&content_2000, path, &regex, &cfg, today).unwrap())
     });
 
     group.finish();
@@ -251,30 +195,13 @@ fn bench_scan_str_includes_regex_compile(c: &mut Criterion) {
     // scan_str compiles the regex on every call — establishes the cost of
     // NOT caching the regex (the wrong pattern, as a baseline comparison).
     group.bench_function("1k_lines_5_annotations_with_regex_compile", |b| {
-        b.iter(|| {
-            scan_str(
-                &content,
-                path,
-                &cfg,
-                today,
-            )
-            .unwrap()
-        })
+        b.iter(|| scan_str(&content, path, &cfg, today).unwrap())
     });
 
     // Same workload but regex pre-compiled — shows the amortised cost.
     let regex = build_regex(&cfg).unwrap();
     group.bench_function("1k_lines_5_annotations_precompiled_regex", |b| {
-        b.iter(|| {
-            scan_content(
-                &content,
-                path,
-                &regex,
-                &cfg,
-                today,
-            )
-            .unwrap()
-        })
+        b.iter(|| scan_content(&content, path, &regex, &cfg, today).unwrap())
     });
 
     group.finish();
@@ -326,17 +253,11 @@ fn bench_build_regex(c: &mut Criterion) {
         b.iter(|| build_regex(&cfg_default).unwrap())
     });
 
-    group.bench_function("1_tag", |b| {
-        b.iter(|| build_regex(&cfg_1_tag).unwrap())
-    });
+    group.bench_function("1_tag", |b| b.iter(|| build_regex(&cfg_1_tag).unwrap()));
 
-    group.bench_function("5_tags", |b| {
-        b.iter(|| build_regex(&cfg_5_tags).unwrap())
-    });
+    group.bench_function("5_tags", |b| b.iter(|| build_regex(&cfg_5_tags).unwrap()));
 
-    group.bench_function("10_tags", |b| {
-        b.iter(|| build_regex(&cfg_10_tags).unwrap())
-    });
+    group.bench_function("10_tags", |b| b.iter(|| build_regex(&cfg_10_tags).unwrap()));
 
     group.finish();
 }
@@ -391,55 +312,19 @@ fn bench_per_line_regex(c: &mut Criterion) {
     let mut group = c.benchmark_group("per_line");
 
     group.bench_function("annotation_line", |b| {
-        b.iter(|| {
-            scan_content(
-                annotation_line,
-                path,
-                &regex,
-                &cfg,
-                today,
-            )
-            .unwrap()
-        })
+        b.iter(|| scan_content(annotation_line, path, &regex, &cfg, today).unwrap())
     });
 
     group.bench_function("plain_todo_no_date", |b| {
-        b.iter(|| {
-            scan_content(
-                plain_todo_line,
-                path,
-                &regex,
-                &cfg,
-                today,
-            )
-            .unwrap()
-        })
+        b.iter(|| scan_content(plain_todo_line, path, &regex, &cfg, today).unwrap())
     });
 
     group.bench_function("code_line_no_bracket", |b| {
-        b.iter(|| {
-            scan_content(
-                code_line,
-                path,
-                &regex,
-                &cfg,
-                today,
-            )
-            .unwrap()
-        })
+        b.iter(|| scan_content(code_line, path, &regex, &cfg, today).unwrap())
     });
 
     group.bench_function("bracket_line_no_annotation", |b| {
-        b.iter(|| {
-            scan_content(
-                bracket_line,
-                path,
-                &regex,
-                &cfg,
-                today,
-            )
-            .unwrap()
-        })
+        b.iter(|| scan_content(bracket_line, path, &regex, &cfg, today).unwrap())
     });
 
     group.finish();
