@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/pbsladek/timebomb/compare/v0.1.0...v0.2.0) (2026-03-24)
+
+
+### Features
+
+* **cli:** add filtering, sorting, output, and ignore directive options ([db59e43](https://github.com/pbsladek/timebomb/commit/db59e435e91e9cdedce2a19cc8402ba762b269bc))
+
 ## 0.1.0 (2026-03-23)
 
 
