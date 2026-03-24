@@ -230,6 +230,12 @@ pub fn scan_content(
             continue;
         }
 
+        // Language-agnostic inline ignore directive. Works inside any comment
+        // syntax (// # -- /* */). Case-insensitive so TIMEBOMB: IGNORE works too.
+        if line.to_ascii_lowercase().contains("timebomb: ignore") {
+            continue;
+        }
+
         let line_number = line_idx + 1; // 1-based
 
         for caps in regex.captures_iter(line) {
@@ -629,6 +635,41 @@ line 6
         assert_eq!(fuses[0].tag, "TODO");
         assert_eq!(fuses[1].tag, "FIXME");
         assert_eq!(fuses[2].tag, "HACK");
+    }
+
+    // -----------------------------------------------------------------------
+    // timebomb: ignore directive
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_scan_ignore_directive_skips_line() {
+        let src = "// TODO[2020-01-01]: remove this  timebomb: ignore\n";
+        let fuses = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
+        assert!(fuses.is_empty(), "annotated-ignore line must be skipped");
+    }
+
+    #[test]
+    fn test_scan_ignore_directive_case_insensitive() {
+        let src = "# TODO[2020-01-01]: remove  TIMEBOMB: IGNORE\n";
+        let fuses = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
+        assert!(fuses.is_empty());
+    }
+
+    #[test]
+    fn test_scan_ignore_directive_sql_style() {
+        let src = "-- TODO[2020-01-01]: drop col  timebomb: ignore\n";
+        let fuses = scan_str(src, Path::new("schema.sql"), &default_config(), today()).unwrap();
+        assert!(fuses.is_empty());
+    }
+
+    #[test]
+    fn test_scan_ignore_only_affects_its_own_line() {
+        let src = "// TODO[2020-01-01]: active\n\
+                   // FIXME[2021-01-01]: ignored  timebomb: ignore\n\
+                   // HACK[2019-01-01]: also active\n";
+        let fuses = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
+        assert_eq!(fuses.len(), 2);
+        assert!(fuses.iter().all(|f| f.tag != "FIXME"));
     }
 
     #[test]

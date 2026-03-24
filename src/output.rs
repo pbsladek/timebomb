@@ -1,5 +1,6 @@
 use crate::annotation::{Fuse, Status};
 use crate::scanner::ScanResult;
+use chrono::NaiveDate;
 use colored::Colorize;
 use serde::Serialize;
 use std::path::Path;
@@ -45,15 +46,33 @@ fn color_enabled() -> bool {
 
 // ─── Terminal formatter ───────────────────────────────────────────────────────
 
-/// Print a `ScanResult` to stdout using the terminal (colored) format.
-pub fn print_terminal(result: &ScanResult, fuse_days: u32, show_ok: bool) {
-    let use_color = color_enabled();
-
-    for fuse in &result.fuses {
-        print_fuse_terminal(fuse, fuse_days, use_color, show_ok);
+/// Format a relative days label for terminal/GitHub output.
+fn days_label(fuse: &Fuse, today: NaiveDate) -> String {
+    let delta = fuse.days_from_today(today);
+    match fuse.status {
+        Status::Detonated => format!(" ({} days overdue)", delta.unsigned_abs()),
+        Status::Ticking => format!(" (in {} days)", delta),
+        Status::Inert => String::new(),
     }
+}
 
-    // Summary line — single pass to avoid three Vec allocations just for counts.
+/// Print a `ScanResult` to stdout using the terminal (colored) format.
+pub fn print_terminal(result: &ScanResult, _fuse_days: u32, show_ok: bool, today: NaiveDate) {
+    let use_color = color_enabled();
+    for fuse in &result.fuses {
+        print_fuse_terminal(fuse, use_color, show_ok, today);
+    }
+    println!();
+    print_summary_line(result, use_color);
+}
+
+/// Print only the summary line — used by `sweep --summary`.
+pub fn print_scan_summary(result: &ScanResult) {
+    print_summary_line(result, color_enabled());
+}
+
+/// Shared summary-line renderer used by both `print_terminal` and `print_scan_summary`.
+fn print_summary_line(result: &ScanResult, use_color: bool) {
     let (detonated_count, ticking_count, inert_count) =
         result
             .fuses
@@ -66,7 +85,6 @@ pub fn print_terminal(result: &ScanResult, fuse_days: u32, show_ok: bool) {
                 }
             });
 
-    println!();
     let summary = format!(
         "Swept {} file(s) · {} fuse(s) total · {} detonated · {} ticking · {} inert",
         result.swept_files,
@@ -100,7 +118,7 @@ fn owner_display(fuse: &Fuse) -> String {
     }
 }
 
-fn print_fuse_terminal(fuse: &Fuse, _fuse_days: u32, use_color: bool, show_ok: bool) {
+fn print_fuse_terminal(fuse: &Fuse, use_color: bool, show_ok: bool, today: NaiveDate) {
     // Skip inert items unless explicitly requested
     if fuse.status == Status::Inert && !show_ok {
         // Still show them in list mode
@@ -115,12 +133,12 @@ fn print_fuse_terminal(fuse: &Fuse, _fuse_days: u32, use_color: bool, show_ok: b
     let location = format!("{:<40}", fuse.location());
     let tag_date = format!("{}[{}]", fuse.tag, fuse.date_str());
     let tag_date_col = format!("{:<20}", tag_date);
-
+    let days_str = days_label(fuse, today);
     let owner_part = owner_display(fuse);
 
     let line = format!(
-        "{} {}  {}{}  {}",
-        status_label, location, tag_date_col, owner_part, fuse.message
+        "{} {}  {}{}{}  {}",
+        status_label, location, tag_date_col, days_str, owner_part, fuse.message
     );
 
     if use_color {
@@ -136,7 +154,7 @@ fn print_fuse_terminal(fuse: &Fuse, _fuse_days: u32, use_color: bool, show_ok: b
 }
 
 /// Print a single fuse in terminal format (used by `manifest` subcommand).
-pub fn print_fuse_line_terminal(fuse: &Fuse, use_color: bool) {
+pub fn print_fuse_line_terminal(fuse: &Fuse, use_color: bool, today: NaiveDate) {
     let status_label = match fuse.status {
         Status::Detonated => "DETONATED",
         Status::Ticking => "TICKING  ",
@@ -146,12 +164,12 @@ pub fn print_fuse_line_terminal(fuse: &Fuse, use_color: bool) {
     let location = format!("{:<40}", fuse.location());
     let tag_date = format!("{}[{}]", fuse.tag, fuse.date_str());
     let tag_date_col = format!("{:<20}", tag_date);
-
+    let days_str = days_label(fuse, today);
     let owner_part = owner_display(fuse);
 
     let line = format!(
-        "{} {}  {}{}  {}",
-        status_label, location, tag_date_col, owner_part, fuse.message
+        "{} {}  {}{}{}  {}",
+        status_label, location, tag_date_col, days_str, owner_part, fuse.message
     );
 
     if use_color {
@@ -241,6 +259,34 @@ pub fn print_json(result: &ScanResult) {
     }
 }
 
+/// Serialize the scan result as JSON and write it to a file (used by `sweep --output`).
+pub fn write_json_report(result: &ScanResult, path: &Path) -> std::io::Result<()> {
+    let detonated: Vec<JsonFuse> = result
+        .detonated()
+        .iter()
+        .map(|f| JsonFuse::from_fuse(f))
+        .collect();
+    let ticking: Vec<JsonFuse> = result
+        .ticking()
+        .iter()
+        .map(|f| JsonFuse::from_fuse(f))
+        .collect();
+    let inert: Vec<JsonFuse> = result
+        .inert()
+        .iter()
+        .map(|f| JsonFuse::from_fuse(f))
+        .collect();
+    let output = JsonOutput {
+        swept_files: result.swept_files,
+        total_fuses: result.total(),
+        detonated,
+        ticking,
+        inert,
+    };
+    let json = serde_json::to_string_pretty(&output).map_err(std::io::Error::other)?;
+    std::fs::write(path, json)
+}
+
 /// Serialize a slice of fuses as a JSON array (used by `manifest --format json`).
 pub fn print_json_list(fuses: &[&Fuse]) {
     let items: Vec<JsonFuse> = fuses.iter().map(|f| JsonFuse::from_fuse(f)).collect();
@@ -258,42 +304,38 @@ pub fn print_json_list(fuses: &[&Fuse]) {
 /// Detonated → `::error`
 /// Ticking → `::warning`
 /// Inert → silently skipped
-pub fn print_github(result: &ScanResult, fuse_days: u32) {
+pub fn print_github(result: &ScanResult, _fuse_days: u32, today: NaiveDate) {
     for fuse in &result.fuses {
-        print_fuse_github(fuse, fuse_days);
+        print_fuse_github(fuse, 0, today);
     }
 }
 
 /// Print a single fuse in GitHub Actions format.
-pub fn print_fuse_github(fuse: &Fuse, fuse_days: u32) {
+pub fn print_fuse_github(fuse: &Fuse, _fuse_days: u32, today: NaiveDate) {
     let file = fuse.file.display().to_string();
     let line = fuse.line;
+    let delta = fuse.days_from_today(today);
 
     match fuse.status {
         Status::Detonated => {
             println!(
-                "::error file={},line={}::{} detonated on {}: {}",
+                "::error file={},line={}::{} detonated on {} ({} days overdue): {}",
                 file,
                 line,
                 fuse.tag,
                 fuse.date_str(),
+                delta.unsigned_abs(),
                 fuse.message
             );
         }
         Status::Ticking => {
-            // Calculate how many days remain
-            let days_msg = if fuse_days > 0 {
-                format!(" (within {}d fuse window)", fuse_days)
-            } else {
-                String::new()
-            };
             println!(
-                "::warning file={},line={}::{} detonates on {}{}:  {}",
+                "::warning file={},line={}::{} detonates on {} (in {} days): {}",
                 file,
                 line,
                 fuse.tag,
                 fuse.date_str(),
-                days_msg,
+                delta,
                 fuse.message
             );
         }
@@ -304,32 +346,43 @@ pub fn print_fuse_github(fuse: &Fuse, fuse_days: u32) {
 }
 
 /// Print a slice of fuses in GitHub Actions format for the `manifest` subcommand.
-pub fn print_github_list(fuses: &[&Fuse], fuse_days: u32) {
+pub fn print_github_list(fuses: &[&Fuse], fuse_days: u32, today: NaiveDate) {
     for fuse in fuses {
-        print_fuse_github(fuse, fuse_days);
+        print_fuse_github(fuse, fuse_days, today);
     }
 }
 
 // ─── Dispatch helpers ─────────────────────────────────────────────────────────
 
 /// Top-level dispatch: print a `ScanResult` in whatever format was requested.
-pub fn print_scan_result(result: &ScanResult, format: &OutputFormat, fuse_days: u32) {
+pub fn print_scan_result(
+    result: &ScanResult,
+    format: &OutputFormat,
+    fuse_days: u32,
+    today: NaiveDate,
+) {
     match format {
-        OutputFormat::Terminal => print_terminal(result, fuse_days, false),
+        OutputFormat::Terminal => print_terminal(result, fuse_days, false, today),
         OutputFormat::Json => print_json(result),
-        OutputFormat::GitHub => print_github(result, fuse_days),
+        OutputFormat::GitHub => print_github(result, fuse_days, today),
     }
 }
 
 /// Top-level dispatch for the `manifest` subcommand.
-pub fn print_list(fuses: &[&Fuse], format: &OutputFormat, fuse_days: u32, scan_root: &Path) {
+pub fn print_list(
+    fuses: &[&Fuse],
+    format: &OutputFormat,
+    fuse_days: u32,
+    scan_root: &Path,
+    today: NaiveDate,
+) {
     let _ = scan_root; // available for future use (e.g. relative path display)
     let use_color = color_enabled();
 
     match format {
         OutputFormat::Terminal => {
             for fuse in fuses {
-                print_fuse_line_terminal(fuse, use_color);
+                print_fuse_line_terminal(fuse, use_color, today);
             }
             println!();
             eprintln!("{} fuse(s) listed", fuses.len());
@@ -338,7 +391,7 @@ pub fn print_list(fuses: &[&Fuse], format: &OutputFormat, fuse_days: u32, scan_r
             print_json_list(fuses);
         }
         OutputFormat::GitHub => {
-            print_github_list(fuses, fuse_days);
+            print_github_list(fuses, fuse_days, today);
         }
     }
 }
@@ -354,6 +407,10 @@ mod tests {
 
     fn date(s: &str) -> NaiveDate {
         NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap()
+    }
+
+    fn fixed_today() -> NaiveDate {
+        date("2026-03-23")
     }
 
     fn make_fuse(tag: &str, expiry: &str, status: Status, msg: &str) -> Fuse {
@@ -460,28 +517,25 @@ mod tests {
 
     #[test]
     fn test_print_github_detonated_format() {
-        // Capture via manual construction; we just verify no panic and check format logic
         let fuse = make_fuse(
             "TODO",
             "2020-01-01",
             Status::Detonated,
             "remove legacy oauth",
         );
-        // No panic
-        print_fuse_github(&fuse, 14);
+        print_fuse_github(&fuse, 14, fixed_today());
     }
 
     #[test]
     fn test_print_github_ticking_format() {
-        let fuse = make_fuse("FIXME", "2025-06-10", Status::Ticking, "fix before release");
-        print_fuse_github(&fuse, 14);
+        let fuse = make_fuse("FIXME", "2026-04-01", Status::Ticking, "fix before release");
+        print_fuse_github(&fuse, 14, fixed_today());
     }
 
     #[test]
     fn test_print_github_inert_is_silent() {
-        // We can't easily capture stdout in unit tests, but we can at least ensure no panic
         let fuse = make_fuse("HACK", "2099-01-01", Status::Inert, "fine for now");
-        print_fuse_github(&fuse, 0);
+        print_fuse_github(&fuse, 0, fixed_today());
     }
 
     #[test]
@@ -510,14 +564,13 @@ mod tests {
         let result = ScanResult {
             fuses: vec![
                 make_fuse("TODO", "2020-01-01", Status::Detonated, "old"),
-                make_fuse("FIXME", "2025-06-08", Status::Ticking, "soon"),
+                make_fuse("FIXME", "2026-04-15", Status::Ticking, "soon"),
                 make_fuse("HACK", "2099-12-31", Status::Inert, "future"),
             ],
             swept_files: 3,
             skipped_files: 0,
         };
-        // Should not panic regardless of color support
-        print_terminal(&result, 14, true);
+        print_terminal(&result, 14, true, fixed_today());
     }
 
     #[test]
@@ -529,8 +582,7 @@ mod tests {
             "remove me",
             "alice",
         );
-        // Should not panic
-        print_fuse_line_terminal(&fuse, false);
+        print_fuse_line_terminal(&fuse, false, fixed_today());
     }
 
     #[test]
@@ -541,13 +593,20 @@ mod tests {
             &OutputFormat::Terminal,
             14,
             std::path::Path::new("."),
+            fixed_today(),
         );
     }
 
     #[test]
     fn test_print_list_json_does_not_panic() {
         let fuse = make_fuse("FIXME", "2099-01-01", Status::Inert, "future item");
-        print_list(&[&fuse], &OutputFormat::Json, 0, std::path::Path::new("."));
+        print_list(
+            &[&fuse],
+            &OutputFormat::Json,
+            0,
+            std::path::Path::new("."),
+            fixed_today(),
+        );
     }
 
     #[test]
@@ -558,6 +617,7 @@ mod tests {
             &OutputFormat::GitHub,
             0,
             std::path::Path::new("."),
+            fixed_today(),
         );
     }
 
@@ -569,10 +629,9 @@ mod tests {
             swept_files: 1,
             skipped_files: 0,
         };
-        // All three formats should not panic
-        print_scan_result(&result, &OutputFormat::Terminal, 0);
-        print_scan_result(&result, &OutputFormat::Json, 0);
-        print_scan_result(&result, &OutputFormat::GitHub, 0);
+        print_scan_result(&result, &OutputFormat::Terminal, 0, fixed_today());
+        print_scan_result(&result, &OutputFormat::Json, 0, fixed_today());
+        print_scan_result(&result, &OutputFormat::GitHub, 0, fixed_today());
     }
 
     // ── blamed_owner display ──────────────────────────────────────────────────
@@ -629,7 +688,38 @@ mod tests {
     fn test_print_fuse_line_terminal_with_blamed_owner() {
         let mut fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "msg");
         fuse.blamed_owner = Some("eve".to_string());
-        // Should not panic; no assertion on stdout since we can't capture easily.
-        print_fuse_line_terminal(&fuse, false);
+        print_fuse_line_terminal(&fuse, false, fixed_today());
+    }
+
+    // ── days_label ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_days_label_detonated_shows_overdue() {
+        let fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "msg");
+        let label = days_label(&fuse, fixed_today());
+        assert!(
+            label.contains("overdue"),
+            "expected 'overdue' in '{}'",
+            label
+        );
+        assert!(
+            !label.contains("in "),
+            "detonated should not say 'in X days'"
+        );
+    }
+
+    #[test]
+    fn test_days_label_ticking_shows_days_remaining() {
+        let fuse = make_fuse("FIXME", "2026-04-01", Status::Ticking, "msg");
+        let label = days_label(&fuse, fixed_today());
+        assert!(label.contains("in "), "expected 'in X days' in '{}'", label);
+        assert!(label.contains("days"), "expected 'days' in '{}'", label);
+    }
+
+    #[test]
+    fn test_days_label_inert_is_empty() {
+        let fuse = make_fuse("HACK", "2099-01-01", Status::Inert, "msg");
+        let label = days_label(&fuse, fixed_today());
+        assert!(label.is_empty(), "inert fuses should have no days label");
     }
 }

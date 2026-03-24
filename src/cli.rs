@@ -87,6 +87,34 @@ pub struct SweepArgs {
     /// Base ref for --changed (default: HEAD)
     #[arg(long, value_name = "REF", requires = "changed")]
     pub base: Option<String>,
+
+    /// Only show fuses belonging to this owner (case-insensitive)
+    #[arg(long, value_name = "OWNER")]
+    pub owner: Option<String>,
+
+    /// Only show fuses with this tag (case-insensitive, e.g. "FIXME")
+    #[arg(long, value_name = "TAG")]
+    pub tag: Option<String>,
+
+    /// Suppress all output; rely on the exit code only
+    #[arg(long, default_value_t = false)]
+    pub quiet: bool,
+
+    /// Print only the summary line, not individual fuses
+    #[arg(long, default_value_t = false, conflicts_with = "quiet")]
+    pub summary: bool,
+
+    /// Hard ceiling on detonated fuses; sweep exits 1 if exceeded (overrides config)
+    #[arg(long, value_name = "N")]
+    pub max_detonated: Option<u32>,
+
+    /// Hard ceiling on ticking fuses; sweep exits 1 if exceeded (overrides config)
+    #[arg(long, value_name = "N")]
+    pub max_ticking: Option<u32>,
+
+    /// Write a JSON report to this file in addition to normal output
+    #[arg(long, value_name = "FILE")]
+    pub output: Option<String>,
 }
 
 /// Arguments for the `manifest` subcommand.
@@ -119,6 +147,30 @@ pub struct ManifestArgs {
     /// Enrich fuses without an explicit owner with git blame author
     #[arg(long)]
     pub blame: bool,
+
+    /// Only show fuses belonging to this owner (case-insensitive)
+    #[arg(long, value_name = "OWNER")]
+    pub owner: Option<String>,
+
+    /// Only show fuses with this tag (case-insensitive, e.g. "TODO")
+    #[arg(long, value_name = "TAG")]
+    pub tag: Option<String>,
+
+    /// Show only the N soonest-to-detonate fuses
+    #[arg(long, value_name = "N")]
+    pub next: Option<usize>,
+
+    /// Sort order for the fuse list (default: date)
+    #[arg(long, value_name = "BY")]
+    pub sort: Option<SortBy>,
+
+    /// Only show fuses from these files; may be repeated, supports globs (e.g. "src/auth/**")
+    #[arg(long, value_name = "PATH")]
+    pub file: Vec<String>,
+
+    /// Only show fuses with expiry dates in this range (inclusive), e.g. --between 2026-01-01 2026-06-30
+    #[arg(long, num_args = 2, value_names = ["START", "END"])]
+    pub between: Option<Vec<String>>,
 }
 
 /// Arguments for the `plant` subcommand.
@@ -350,6 +402,19 @@ pub struct BunkerShowArgs {
     pub fuse: Option<String>,
 }
 
+/// The --sort flag value for `manifest`.
+#[derive(Debug, Clone, PartialEq, Eq, ValueEnum)]
+pub enum SortBy {
+    /// Sort by expiry date ascending (default)
+    Date,
+    /// Sort by file path then line number
+    File,
+    /// Sort by owner name then date
+    Owner,
+    /// Sort by status (detonated → ticking → inert) then date
+    Status,
+}
+
 /// The --by flag value for `intel`.
 #[derive(Debug, Clone, PartialEq, Eq, ValueEnum)]
 pub enum GroupBy {
@@ -518,6 +583,258 @@ mod tests {
         match cli.command {
             Command::Sweep(args) => assert_eq!(args.since, Some("HEAD".to_string())),
             _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn test_sweep_owner_flag() {
+        let cli = parse(&["timebomb", "sweep", "--owner", "alice"]);
+        match cli.command {
+            Command::Sweep(args) => assert_eq!(args.owner, Some("alice".to_string())),
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_owner_flag() {
+        let cli = parse(&["timebomb", "manifest", "--owner", "bob"]);
+        match cli.command {
+            Command::Manifest(args) => assert_eq!(args.owner, Some("bob".to_string())),
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_sweep_tag_flag() {
+        let cli = parse(&["timebomb", "sweep", "--tag", "FIXME"]);
+        match cli.command {
+            Command::Sweep(args) => assert_eq!(args.tag, Some("FIXME".to_string())),
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn test_sweep_quiet_flag() {
+        let cli = parse(&["timebomb", "sweep", "--quiet"]);
+        match cli.command {
+            Command::Sweep(args) => assert!(args.quiet),
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn test_sweep_quiet_default_false() {
+        let cli = parse(&["timebomb", "sweep"]);
+        match cli.command {
+            Command::Sweep(args) => assert!(!args.quiet),
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_tag_flag() {
+        let cli = parse(&["timebomb", "manifest", "--tag", "TODO"]);
+        match cli.command {
+            Command::Manifest(args) => assert_eq!(args.tag, Some("TODO".to_string())),
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_next_flag() {
+        let cli = parse(&["timebomb", "manifest", "--next", "5"]);
+        match cli.command {
+            Command::Manifest(args) => assert_eq!(args.next, Some(5)),
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_next_default_none() {
+        let cli = parse(&["timebomb", "manifest"]);
+        match cli.command {
+            Command::Manifest(args) => assert!(args.next.is_none()),
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_sweep_summary_flag() {
+        let cli = parse(&["timebomb", "sweep", "--summary"]);
+        match cli.command {
+            Command::Sweep(args) => assert!(args.summary),
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn test_sweep_summary_and_quiet_conflict() {
+        let result = try_parse(&["timebomb", "sweep", "--summary", "--quiet"]);
+        assert!(result.is_err(), "--summary and --quiet should conflict");
+    }
+
+    #[test]
+    fn test_sweep_max_detonated_flag() {
+        let cli = parse(&["timebomb", "sweep", "--max-detonated", "0"]);
+        match cli.command {
+            Command::Sweep(args) => assert_eq!(args.max_detonated, Some(0)),
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn test_sweep_max_ticking_flag() {
+        let cli = parse(&["timebomb", "sweep", "--max-ticking", "5"]);
+        match cli.command {
+            Command::Sweep(args) => assert_eq!(args.max_ticking, Some(5)),
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn test_sweep_max_flags_default_none() {
+        let cli = parse(&["timebomb", "sweep"]);
+        match cli.command {
+            Command::Sweep(args) => {
+                assert!(args.max_detonated.is_none());
+                assert!(args.max_ticking.is_none());
+            }
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_sort_date() {
+        let cli = parse(&["timebomb", "manifest", "--sort", "date"]);
+        match cli.command {
+            Command::Manifest(args) => assert_eq!(args.sort, Some(SortBy::Date)),
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_sort_file() {
+        let cli = parse(&["timebomb", "manifest", "--sort", "file"]);
+        match cli.command {
+            Command::Manifest(args) => assert_eq!(args.sort, Some(SortBy::File)),
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_sort_owner() {
+        let cli = parse(&["timebomb", "manifest", "--sort", "owner"]);
+        match cli.command {
+            Command::Manifest(args) => assert_eq!(args.sort, Some(SortBy::Owner)),
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_sort_status() {
+        let cli = parse(&["timebomb", "manifest", "--sort", "status"]);
+        match cli.command {
+            Command::Manifest(args) => assert_eq!(args.sort, Some(SortBy::Status)),
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_sort_default_none() {
+        let cli = parse(&["timebomb", "manifest"]);
+        match cli.command {
+            Command::Manifest(args) => assert!(args.sort.is_none()),
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_sweep_output_flag() {
+        let cli = parse(&["timebomb", "sweep", "--output", "report.json"]);
+        match cli.command {
+            Command::Sweep(args) => assert_eq!(args.output, Some("report.json".to_string())),
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn test_sweep_output_default_none() {
+        let cli = parse(&["timebomb", "sweep"]);
+        match cli.command {
+            Command::Sweep(args) => assert!(args.output.is_none()),
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_file_single() {
+        let cli = parse(&["timebomb", "manifest", "--file", "src/auth/login.rs"]);
+        match cli.command {
+            Command::Manifest(args) => {
+                assert_eq!(args.file, vec!["src/auth/login.rs".to_string()])
+            }
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_file_multiple() {
+        let cli = parse(&[
+            "timebomb",
+            "manifest",
+            "--file",
+            "src/auth/login.rs",
+            "--file",
+            "src/db/schema.sql",
+        ]);
+        match cli.command {
+            Command::Manifest(args) => {
+                assert_eq!(
+                    args.file,
+                    vec![
+                        "src/auth/login.rs".to_string(),
+                        "src/db/schema.sql".to_string(),
+                    ]
+                )
+            }
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_file_default_empty() {
+        let cli = parse(&["timebomb", "manifest"]);
+        match cli.command {
+            Command::Manifest(args) => assert!(args.file.is_empty()),
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_between_flag() {
+        let cli = parse(&[
+            "timebomb",
+            "manifest",
+            "--between",
+            "2026-01-01",
+            "2026-06-30",
+        ]);
+        match cli.command {
+            Command::Manifest(args) => {
+                let dates = args.between.unwrap();
+                assert_eq!(dates[0], "2026-01-01");
+                assert_eq!(dates[1], "2026-06-30");
+            }
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_between_default_none() {
+        let cli = parse(&["timebomb", "manifest"]);
+        match cli.command {
+            Command::Manifest(args) => assert!(args.between.is_none()),
+            _ => panic!("expected Manifest"),
         }
     }
 
