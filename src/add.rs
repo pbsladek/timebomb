@@ -1,9 +1,9 @@
-//! Logic for the `timebomb add` subcommand.
+//! Logic for the `timebomb plant` subcommand.
 //!
-//! This module implements the core logic for inserting a timebomb annotation
-//! into a source file at a specific line. It is intentionally defined with
-//! primitive parameters so that it compiles independently of any `AddArgs`
-//! struct changes in `cli.rs`.
+//! This module implements the core logic for inserting a timebomb fuse into a
+//! source file at a specific line. It is intentionally defined with primitive
+//! parameters so that it compiles independently of any `PlantArgs` struct
+//! changes in `cli.rs`.
 
 use crate::error::{Error, Result};
 use chrono::NaiveDate;
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Core logic for `timebomb add`.
+/// Core logic for `timebomb plant`.
 ///
 /// All parameters are primitives so this compiles independently of `cli.rs`
 /// changes.
@@ -72,6 +72,14 @@ pub fn run_add(
 
     // 2. Resolve the expiry date ---------------------------------------------
     let expiry = resolve_date(date_str, in_days, today, yes)?;
+
+    // Warn if the date is already in the past — the fuse will immediately detonate.
+    if expiry < today {
+        eprintln!(
+            "warning: expiry date {} is already in the past — this fuse will detonate immediately",
+            expiry.format("%Y-%m-%d")
+        );
+    }
 
     // 3. Detect comment style ------------------------------------------------
     let prefix = detect_comment_style(&file_path);
@@ -367,7 +375,12 @@ pub fn resolve_date(
                 if trimmed.is_empty() {
                     90
                 } else {
-                    trimmed.parse::<u32>().unwrap_or(90)
+                    trimmed.parse::<u32>().map_err(|_| {
+                        Error::InvalidArgument(format!(
+                            "'{}' is not a valid number of days",
+                            trimmed
+                        ))
+                    })?
                 }
             };
             today

@@ -14,14 +14,15 @@ use timebomb::output::{
 use timebomb::remove::{run_remove, run_remove_all_expired};
 use timebomb::scanner::scan;
 use timebomb::snooze::run_snooze;
-use timebomb::stats::{compute_stats, print_stats};
+use timebomb::stats::{compute_stats, print_stats, print_stats_month};
 use timebomb::trend;
 
 use chrono::Local;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use clap_complete::generate;
 use std::path::{Path, PathBuf};
 use std::process;
-use timebomb::cli::{BaselineCommand, Cli, Command, SortBy, TripwireCommand};
+use timebomb::cli::{BaselineCommand, Cli, Command, GroupBy, SortBy, TripwireCommand};
 
 fn main() {
     let cli = Cli::parse();
@@ -37,6 +38,21 @@ fn main() {
     };
 
     process::exit(exit_code);
+}
+
+/// Resolve the fuse warning window: CLI flag > `TIMEBOMB_FUSE_DAYS` env var > None.
+///
+/// The env var accepts a plain integer ("30") or a duration string ("30d"). CLI always wins.
+fn resolve_fuse_arg(cli_fuse: Option<String>) -> Option<String> {
+    cli_fuse.or_else(|| {
+        std::env::var("TIMEBOMB_FUSE_DAYS").ok().map(|v| {
+            if v.ends_with('d') {
+                v
+            } else {
+                format!("{}d", v)
+            }
+        })
+    })
 }
 
 /// Returns true if `fuse_file` (relative path) matches a user-supplied filter string.
@@ -80,7 +96,7 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
     match cli.command {
         Command::Sweep(args) => {
             let scan_path = canonicalize_path(Path::new(&args.path))?;
-            let overrides = CliOverrides::new(args.fuse.clone(), args.fail_on_ticking);
+            let overrides = CliOverrides::new(resolve_fuse_arg(args.fuse), args.fail_on_ticking);
             let mut cfg = resolve_config(args.config.as_deref(), &scan_path, &overrides)?;
 
             // --since: restrict scan to files changed relative to the given git ref.
@@ -136,6 +152,16 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 result.fuses.retain(|fuse| fuse.tag.to_lowercase() == lower);
             }
 
+            // --no-inert: drop inert fuses from display only.
+            // This does NOT affect the exit code: result.detonated() and
+            // result.ticking() filter by status, so removing inert fuses from
+            // result.fuses has no impact on ratchet counts.
+            if args.no_inert {
+                result
+                    .fuses
+                    .retain(|fuse| fuse.status != timebomb::annotation::Status::Inert);
+            }
+
             if !args.quiet {
                 if args.summary {
                     print_scan_summary(&result);
@@ -188,7 +214,7 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
 
         Command::Manifest(args) => {
             let scan_path = canonicalize_path(Path::new(&args.path))?;
-            let overrides = CliOverrides::new(args.fuse.clone(), false);
+            let overrides = CliOverrides::new(resolve_fuse_arg(args.fuse), false);
             let cfg = resolve_config(args.config.as_deref(), &scan_path, &overrides)?;
 
             let format = match args.format {
@@ -218,6 +244,20 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             if let Some(ref tag_filter) = args.tag {
                 let lower = tag_filter.to_lowercase();
                 result.fuses.retain(|fuse| fuse.tag.to_lowercase() == lower);
+            }
+
+            // --no-inert: drop inert fuses before status filtering.
+            if args.no_inert {
+                result
+                    .fuses
+                    .retain(|fuse| fuse.status != timebomb::annotation::Status::Inert);
+            }
+
+            // --owner-missing: keep only fuses with no explicit owner and no blame result.
+            if args.owner_missing {
+                result
+                    .fuses
+                    .retain(|fuse| fuse.owner.is_none() && fuse.blamed_owner.is_none());
             }
 
             let mut fuses: Vec<&annotation::Fuse> = if args.detonated {
@@ -258,6 +298,12 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                             dates[1]
                         ))
                     })?;
+                if start > end {
+                    return Err(Error::InvalidArgument(format!(
+                        "--between: start date '{}' is after end date '{}'",
+                        dates[0], dates[1]
+                    )));
+                }
                 fuses.retain(|f| f.date >= start && f.date <= end);
             }
 
@@ -290,7 +336,25 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 fuses.truncate(n);
             }
 
-            print_list(&fuses, &format, cfg.fuse_days, &scan_path, today);
+            if args.count {
+                println!("{}", fuses.len());
+            } else {
+                print_list(&fuses, &format, cfg.fuse_days, &scan_path, today);
+            }
+
+            // --output: write the filtered fuse list as a JSON file.
+            if let Some(ref out_path) = args.output {
+                use timebomb::output::print_json_list_to_writer;
+                let file = std::fs::File::create(out_path).map_err(|e| Error::Io {
+                    source: e,
+                    path: Some(PathBuf::from(out_path)),
+                })?;
+                print_json_list_to_writer(&fuses, file).map_err(|e| Error::Io {
+                    source: e,
+                    path: Some(PathBuf::from(out_path)),
+                })?;
+            }
+
             Ok(0)
         }
 
@@ -333,7 +397,7 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
 
         Command::Intel(args) => {
             let scan_path = canonicalize_path(Path::new(&args.path))?;
-            let overrides = CliOverrides::new(args.fuse.clone(), false);
+            let overrides = CliOverrides::new(resolve_fuse_arg(args.fuse), false);
             let cfg = resolve_config(args.config.as_deref(), &scan_path, &overrides)?;
 
             let format = match args.format {
@@ -341,9 +405,33 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 None => OutputFormat::auto_detect(),
             };
 
-            let result = scan(&scan_path, &cfg, today)?;
+            let mut result = scan(&scan_path, &cfg, today)?;
+
+            if let Some(ref owner_filter) = args.owner {
+                let lower = owner_filter.to_lowercase();
+                result.fuses.retain(|fuse| {
+                    fuse.owner
+                        .as_deref()
+                        .or(fuse.blamed_owner.as_deref())
+                        .map(|o| o.to_lowercase() == lower)
+                        .unwrap_or(false)
+                });
+            }
+
+            if let Some(ref tag_filter) = args.tag {
+                let lower = tag_filter.to_lowercase();
+                result.fuses.retain(|fuse| fuse.tag.to_lowercase() == lower);
+            }
+
             let stats = compute_stats(&result.fuses);
-            print_stats(&stats, &format);
+            match args.by {
+                None | Some(GroupBy::Owner) | Some(GroupBy::Tag) => {
+                    print_stats(&stats, &format);
+                }
+                Some(GroupBy::Month) => {
+                    print_stats_month(&stats, &format);
+                }
+            }
             Ok(0)
         }
 
@@ -372,7 +460,7 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
 
         Command::Defuse(args) => {
             let scan_path = canonicalize_path(Path::new(&args.path))?;
-            let overrides = CliOverrides::new(args.fuse.clone(), false);
+            let overrides = CliOverrides::new(resolve_fuse_arg(args.fuse), false);
             let cfg = resolve_config(args.config.as_deref(), &scan_path, &overrides)?;
             let summary = fix::run_fix(&scan_path, &cfg, today)?;
             println!(
@@ -385,7 +473,7 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
         Command::Bunker(args) => match args.command {
             BaselineCommand::Save(a) => {
                 let scan_path = canonicalize_path(Path::new(&a.path))?;
-                let overrides = CliOverrides::new(a.fuse.clone(), false);
+                let overrides = CliOverrides::new(resolve_fuse_arg(a.fuse), false);
                 let cfg = resolve_config(a.config.as_deref(), &scan_path, &overrides)?;
                 let baseline_path = Path::new(&a.baseline_file);
                 // Use the full RFC 3339 timestamp from the local clock, not just the date.
@@ -394,12 +482,18 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             }
             BaselineCommand::Show(a) => {
                 let scan_path = canonicalize_path(Path::new(&a.path))?;
-                let overrides = CliOverrides::new(a.fuse.clone(), false);
+                let overrides = CliOverrides::new(resolve_fuse_arg(a.fuse), false);
                 let cfg = resolve_config(a.config.as_deref(), &scan_path, &overrides)?;
                 let baseline_path = Path::new(&a.baseline_file);
                 baseline::run_baseline_show(&scan_path, &cfg, today, baseline_path)
             }
         },
+
+        Command::Completions(args) => {
+            let mut cmd = Cli::command();
+            generate(args.shell, &mut cmd, "timebomb", &mut std::io::stdout());
+            Ok(0)
+        }
     }
 }
 
@@ -1208,6 +1302,89 @@ mod tests {
             "0",
         ]);
         assert_eq!(run(cli, fixed_today()).unwrap(), 0);
+    }
+
+    // ── manifest --count ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_manifest_count_exits_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = std::fs::File::create(dir.path().join("a.rs")).unwrap();
+        writeln!(f, "// TODO[2020-01-01]: detonated").unwrap();
+        writeln!(f, "// FIXME[2099-01-01]: future").unwrap();
+
+        let cli = Cli::parse_from([
+            "timebomb",
+            "manifest",
+            dir.path().to_str().unwrap(),
+            "--count",
+        ]);
+        // manifest always exits 0 regardless of detonated
+        assert_eq!(run(cli, fixed_today()).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_manifest_count_with_detonated_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = std::fs::File::create(dir.path().join("a.rs")).unwrap();
+        writeln!(f, "// TODO[2020-01-01]: detonated 1").unwrap();
+        writeln!(f, "// FIXME[2021-01-01]: detonated 2").unwrap();
+        writeln!(f, "// HACK[2099-01-01]: future").unwrap();
+
+        let cli = Cli::parse_from([
+            "timebomb",
+            "manifest",
+            dir.path().to_str().unwrap(),
+            "--detonated",
+            "--count",
+        ]);
+        assert_eq!(run(cli, fixed_today()).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_manifest_count_empty_dir_is_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = Cli::parse_from([
+            "timebomb",
+            "manifest",
+            dir.path().to_str().unwrap(),
+            "--count",
+        ]);
+        assert_eq!(run(cli, fixed_today()).unwrap(), 0);
+    }
+
+    // ── TIMEBOMB_FUSE_DAYS env var ────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_fuse_arg_cli_wins_over_env() {
+        // CLI value should take priority over env var
+        std::env::set_var("TIMEBOMB_FUSE_DAYS", "999");
+        let result = resolve_fuse_arg(Some("14d".to_string()));
+        std::env::remove_var("TIMEBOMB_FUSE_DAYS");
+        assert_eq!(result, Some("14d".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_fuse_arg_env_plain_number() {
+        std::env::set_var("TIMEBOMB_FUSE_DAYS", "30");
+        let result = resolve_fuse_arg(None);
+        std::env::remove_var("TIMEBOMB_FUSE_DAYS");
+        assert_eq!(result, Some("30d".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_fuse_arg_env_with_d_suffix() {
+        std::env::set_var("TIMEBOMB_FUSE_DAYS", "30d");
+        let result = resolve_fuse_arg(None);
+        std::env::remove_var("TIMEBOMB_FUSE_DAYS");
+        assert_eq!(result, Some("30d".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_fuse_arg_none_when_no_env() {
+        std::env::remove_var("TIMEBOMB_FUSE_DAYS");
+        let result = resolve_fuse_arg(None);
+        assert_eq!(result, None);
     }
 
     // ── file_matches ──────────────────────────────────────────────────────────

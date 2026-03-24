@@ -212,7 +212,9 @@ pub fn run_hook_uninstall(path: &Path, yes: bool) -> Result<i32> {
 
     let cleaned = remove_timebomb_block(&content);
 
-    // Lines that count as "real content" (non-empty after trim).
+    // Lines that count as "real content" (non-boilerplate after trim).
+    // The shebang and `set -e` are standard shell boilerplate; if only those
+    // remain after removing the timebomb block, the hook file is safe to delete.
     let has_real_content = cleaned
         .lines()
         .any(|l| !l.trim().is_empty() && l.trim() != "#!/bin/sh" && l.trim() != "set -e");

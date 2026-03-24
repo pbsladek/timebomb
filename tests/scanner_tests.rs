@@ -13,7 +13,7 @@ use timebomb::config::Config;
 use timebomb::scanner::{build_regex, scan, scan_content};
 
 /// Convenience helper: scan an inline string with a freshly built regex.
-/// Mirrors the old `scan_str` function that is now `pub(crate)` (test-only).
+/// Wraps the public `scan_content` function to keep test call-sites concise.
 fn scan_str(
     src: &str,
     path: &Path,

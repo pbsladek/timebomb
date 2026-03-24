@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(sanitize_author("\x1b[31mred name\x1b[0m"), "red name");
         // Null bytes and other control characters must be stripped.
         assert_eq!(sanitize_author("alice\x00bob"), "alicebob");
-        // Normal names pass through unchanged.
+        // Normal names (no ANSI escapes or control characters) pass through unchanged.
         assert_eq!(sanitize_author("Alice Smith"), "Alice Smith");
         // Leading/trailing whitespace is trimmed.
         assert_eq!(sanitize_author("  Alice  "), "Alice");
@@ -208,7 +208,7 @@ author-mail <bob@example.com>\n\
 
     #[test]
     fn test_enrich_with_blame_skips_owned() {
-        // Annotation with an explicit owner must not be touched.
+        // Fuse with an explicit owner must not be touched.
         let mut annotations = vec![make_annotation(1, Some("alice"))];
         // Use a path that won't be a real git repo — blame_file will return None.
         let fake_root = std::path::Path::new("/tmp/not-a-git-repo");
@@ -220,7 +220,7 @@ author-mail <bob@example.com>\n\
 
     #[test]
     fn test_enrich_with_blame_no_blame_data() {
-        // Annotation with no owner; blame_file returns None (not a git repo).
+        // Fuse with no owner; blame_file returns None (not a git repo).
         let mut annotations = vec![make_annotation(5, None)];
         let fake_root = std::path::Path::new("/tmp/not-a-git-repo");
         enrich_with_blame(&mut annotations, fake_root);
@@ -313,7 +313,7 @@ author-mail <eve@example.com>\n\
 \tsome line\n\
 ";
         let blame_map = parse_blame_porcelain(porcelain);
-        // Annotation at line 3 with an explicit owner.
+        // Fuse at line 3 with an explicit owner.
         let mut ann = make_annotation(3, Some("alice"));
         // enrich logic: only touch annotations without an owner
         if ann.owner.is_none() {

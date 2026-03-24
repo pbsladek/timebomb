@@ -70,6 +70,14 @@ timebomb sweep --since HEAD             # only check fuses on lines changed sinc
 timebomb sweep --blame                  # enrich unowned fuses via git blame
 timebomb sweep --format json            # machine-readable output
 timebomb sweep --format github          # GitHub Actions workflow commands
+timebomb sweep --tag FIXME              # only sweep fuses with this tag
+timebomb sweep --owner alice            # only sweep fuses owned by alice
+timebomb sweep --no-inert               # hide inert fuses from output
+timebomb sweep --quiet                  # suppress all output (exit code only)
+timebomb sweep --summary                # print only the summary line
+timebomb sweep --output report.json     # also write a JSON report to a file
+timebomb sweep --max-detonated 0        # override ratchet ceiling for this run
+timebomb sweep --max-ticking 5
 ```
 
 `sweep` is the only command that exits non-zero. All other commands are informational and always exit 0.
@@ -81,7 +89,30 @@ timebomb manifest                       # all fuses, sorted by date ascending
 timebomb manifest --detonated           # only detonated
 timebomb manifest --ticking 14d         # only ticking within 14 days
 timebomb manifest --format json
+timebomb manifest --format csv          # CSV output for spreadsheets / scripting
 timebomb manifest --blame
+timebomb manifest --owner alice         # filter by owner
+timebomb manifest --tag TODO            # filter by tag
+timebomb manifest --owner-missing       # only fuses with no owner and no blame result
+timebomb manifest --no-inert            # hide inert fuses
+timebomb manifest --file src/auth.rs    # filter to a specific file (supports globs)
+timebomb manifest --file "src/auth/**"  # glob filter
+timebomb manifest --file src/auth.rs --file src/db.rs  # multiple files
+timebomb manifest --between 2026-01-01 2026-06-30  # date range filter
+timebomb manifest --sort date           # sort by expiry date (default)
+timebomb manifest --sort file           # sort by file path then line
+timebomb manifest --sort owner          # sort by owner then date
+timebomb manifest --sort status         # sort detonated → ticking → inert
+timebomb manifest --next 10             # show only the 10 soonest fuses
+timebomb manifest --count               # print only the count as a plain integer
+```
+
+Terminal output includes a compact age column showing days until expiry or overdue:
+
+```
+DETONATED src/auth/login.rs:42              TODO[2025-01-15]      -433d  [alice]  remove legacy oauth flow
+TICKING   src/db/schema.sql:108             FIXME[2026-04-08]     +15d          drop temp_users table
+INERT     src/api/handler.rs:77             HACK[2099-01-01]      +26946d       revisit when platform ships
 ```
 
 ### `defuse` — interactively resolve detonated fuses
@@ -128,11 +159,13 @@ timebomb disarm --all-detonated         # remove every detonated fuse in the sca
 timebomb disarm --all-detonated --yes   # skip confirmation
 ```
 
-### `intel` — breakdown by owner or tag
+### `intel` — breakdown by owner, tag, or month
 
 ```bash
 timebomb intel                          # count fuses grouped by owner and tag
 timebomb intel --by owner
+timebomb intel --by tag
+timebomb intel --by month               # timeline view grouped by expiry month
 timebomb intel --by tag --format json
 ```
 
@@ -188,6 +221,21 @@ max_detonated = 0
 max_ticking = 5
 ```
 
+### `completions` — shell completion scripts
+
+```bash
+timebomb completions bash               # print bash completion script
+timebomb completions zsh                # print zsh completion script
+timebomb completions fish               # print fish completion script
+```
+
+Pipe to your completions directory to enable tab-completion for all subcommands and flags:
+
+```bash
+timebomb completions zsh > ~/.zsh/completions/_timebomb
+timebomb completions bash > /etc/bash_completion.d/timebomb
+```
+
 ---
 
 ## Output formats
@@ -195,14 +243,14 @@ max_ticking = 5
 ### Terminal (default)
 
 ```
-DETONATED  src/auth/login.rs:42       TODO[2026-01-15]    remove legacy oauth flow
-TICKING    src/db/schema.sql:108      FIXME[2026-04-01]   drop temp_users table
-INERT      src/api/handler.rs:77      HACK[2099-01-01]    revisit when platform ships
+DETONATED  src/auth/login.rs:42       TODO[2026-01-15]      -433d  remove legacy oauth flow
+TICKING    src/db/schema.sql:108      FIXME[2026-04-01]     +8d    drop temp_users table
+INERT      src/api/handler.rs:77      HACK[2099-01-01]      +26946d  revisit when platform ships
 
 Swept 142 file(s) · 17 fuse(s) · 1 detonated · 1 ticking · 15 inert
 ```
 
-With `--blame`, unowned fuses show the git blame author as `[~name]`. Explicit `[owner]` brackets are shown as-is and are never overwritten.
+The age column (`-Xd` / `+Xd`) shows how many days overdue or until expiry. With `--blame`, unowned fuses show the git blame author as `[~name]`. Explicit `[owner]` brackets are shown as-is and are never overwritten.
 
 Respects `NO_COLOR`.
 
@@ -227,6 +275,15 @@ Respects `NO_COLOR`.
   "inert": [...]
 }
 ```
+
+### CSV (`--format csv`, `manifest` only)
+
+```
+file,line,tag,date,owner,status,message
+src/auth/login.rs,42,TODO,2026-01-15,,detonated,remove legacy oauth flow
+```
+
+Fields containing commas or quotes are quoted per RFC 4180.
 
 ### GitHub Actions (`--format github`)
 
@@ -278,6 +335,14 @@ max_ticking = 5
 | `max_ticking` | integer | — | Hard ceiling; `sweep` exits 1 if exceeded |
 
 CLI flags override config file values. If no config file is found, built-in defaults apply silently.
+
+### Environment variables
+
+| Variable | Description |
+|----------|-------------|
+| `TIMEBOMB_FUSE_DAYS` | Default fuse warning window (e.g. `14` or `14d`). Overridden by `--fuse`. |
+| `NO_COLOR` | Disable terminal color output when set. |
+| `GITHUB_ACTIONS` | When `true`, auto-selects GitHub Actions output format. |
 
 ---
 

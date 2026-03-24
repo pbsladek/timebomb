@@ -1,33 +1,8 @@
 //! Logic for the `timebomb init` subcommand.
 //!
-//! This module implements the core logic for bootstrapping a `.timebomb.toml`
-//! configuration file in a target directory by auto-detecting the tech stack
-//! and writing a tailored config. It also prints a CI snippet to stdout.
-//!
-//! NOTE to cli agent: when wiring up `InitArgs`, define it as:
-//!
-//! ```ignore
-//! /// Arguments for the `init` subcommand.
-//! #[derive(Debug, clap::Args)]
-//! pub struct InitArgs {
-//!     /// Directory to initialise (defaults to current directory)
-//!     #[arg(value_name = "DIR", default_value = ".")]
-//!     pub dir: PathBuf,
-//!
-//!     /// Accept all defaults without prompting
-//!     #[arg(long, default_value_t = false)]
-//!     pub yes: bool,
-//! }
-//! ```
-//!
-//! Then add a thin wrapper in `cli.rs` / `main.rs` that calls:
-//!
-//! ```ignore
-//! timebomb::init::run_init(
-//!     &args.dir,
-//!     args.yes,
-//! )
-//! ```
+//! Bootstraps a `.timebomb.toml` configuration file in a target directory by
+//! auto-detecting the tech stack and writing a tailored config. Also prints a
+//! CI snippet to stdout so the user can copy it into their pipeline.
 
 use crate::error::{Error, Result};
 use colored::Colorize;
@@ -170,7 +145,9 @@ exclude = [
 // print_ci_snippet
 // ---------------------------------------------------------------------------
 
-/// Print a CI integration snippet to stdout appropriate for the detected stack.
+/// Print a generic CI integration snippet to stdout.
+/// The `_stack` parameter is reserved for future stack-specific output;
+/// currently the same GitHub Actions snippet is emitted regardless of the detected stack.
 pub fn print_ci_snippet(_stack: &DetectedStack) {
     let divider = "─".repeat(46);
     let divider_colored = divider.cyan().dimmed();

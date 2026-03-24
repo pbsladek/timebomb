@@ -14,6 +14,8 @@ pub enum OutputFormat {
     Json,
     /// GitHub Actions annotation format.
     GitHub,
+    /// Comma-separated values.
+    Csv,
 }
 
 impl OutputFormat {
@@ -33,6 +35,7 @@ impl OutputFormat {
             "terminal" | "term" => Some(OutputFormat::Terminal),
             "json" => Some(OutputFormat::Json),
             "github" | "gh" => Some(OutputFormat::GitHub),
+            "csv" => Some(OutputFormat::Csv),
             _ => None,
         }
     }
@@ -57,10 +60,10 @@ fn days_label(fuse: &Fuse, today: NaiveDate) -> String {
 }
 
 /// Print a `ScanResult` to stdout using the terminal (colored) format.
-pub fn print_terminal(result: &ScanResult, _fuse_days: u32, show_ok: bool, today: NaiveDate) {
+pub fn print_terminal(result: &ScanResult, _fuse_days: u32, _show_ok: bool, today: NaiveDate) {
     let use_color = color_enabled();
     for fuse in &result.fuses {
-        print_fuse_terminal(fuse, use_color, show_ok, today);
+        print_fuse_terminal(fuse, use_color, today);
     }
     println!();
     print_summary_line(result, use_color);
@@ -118,12 +121,30 @@ fn owner_display(fuse: &Fuse) -> String {
     }
 }
 
-fn print_fuse_terminal(fuse: &Fuse, use_color: bool, show_ok: bool, today: NaiveDate) {
-    // Skip inert items unless explicitly requested
-    if fuse.status == Status::Inert && !show_ok {
-        // Still show them in list mode
-    }
+/// Compact signed age: `-98d` (overdue) or `+12d` (future), fixed 7-char wide column.
+/// Used by `manifest` (list) output.
+fn age_col(fuse: &Fuse, today: NaiveDate) -> String {
+    let delta = fuse.days_from_today(today);
+    let raw = if delta < 0 {
+        format!("-{}d", delta.unsigned_abs())
+    } else {
+        format!("+{}d", delta)
+    };
+    format!("{:<7}", raw)
+}
 
+/// How to render the time-relative field for a fuse line.
+enum AgeStyle {
+    /// Compact `+Xd` / `-Xd` column (manifest).
+    Compact,
+    /// Verbose `(X days overdue)` / `(in X days)` suffix (sweep).
+    Verbose,
+}
+
+/// Shared single-fuse terminal renderer used by both sweep and manifest output.
+///
+/// `sweep` uses `AgeStyle::Verbose`; `manifest` uses `AgeStyle::Compact`.
+fn print_fuse_line(fuse: &Fuse, use_color: bool, today: NaiveDate, age_style: AgeStyle) {
     let status_label = match fuse.status {
         Status::Detonated => "DETONATED",
         Status::Ticking => "TICKING  ",
@@ -133,13 +154,24 @@ fn print_fuse_terminal(fuse: &Fuse, use_color: bool, show_ok: bool, today: Naive
     let location = format!("{:<40}", fuse.location());
     let tag_date = format!("{}[{}]", fuse.tag, fuse.date_str());
     let tag_date_col = format!("{:<20}", tag_date);
-    let days_str = days_label(fuse, today);
     let owner_part = owner_display(fuse);
 
-    let line = format!(
-        "{} {}  {}{}{}  {}",
-        status_label, location, tag_date_col, days_str, owner_part, fuse.message
-    );
+    let line = match age_style {
+        AgeStyle::Compact => {
+            let age = age_col(fuse, today);
+            format!(
+                "{} {}  {}  {}{}  {}",
+                status_label, location, tag_date_col, age, owner_part, fuse.message
+            )
+        }
+        AgeStyle::Verbose => {
+            let days_str = days_label(fuse, today);
+            format!(
+                "{} {}  {}{}{}  {}",
+                status_label, location, tag_date_col, days_str, owner_part, fuse.message
+            )
+        }
+    };
 
     if use_color {
         let colored_line = match fuse.status {
@@ -153,35 +185,13 @@ fn print_fuse_terminal(fuse: &Fuse, use_color: bool, show_ok: bool, today: Naive
     }
 }
 
+fn print_fuse_terminal(fuse: &Fuse, use_color: bool, today: NaiveDate) {
+    print_fuse_line(fuse, use_color, today, AgeStyle::Verbose);
+}
+
 /// Print a single fuse in terminal format (used by `manifest` subcommand).
 pub fn print_fuse_line_terminal(fuse: &Fuse, use_color: bool, today: NaiveDate) {
-    let status_label = match fuse.status {
-        Status::Detonated => "DETONATED",
-        Status::Ticking => "TICKING  ",
-        Status::Inert => "INERT    ",
-    };
-
-    let location = format!("{:<40}", fuse.location());
-    let tag_date = format!("{}[{}]", fuse.tag, fuse.date_str());
-    let tag_date_col = format!("{:<20}", tag_date);
-    let days_str = days_label(fuse, today);
-    let owner_part = owner_display(fuse);
-
-    let line = format!(
-        "{} {}  {}{}{}  {}",
-        status_label, location, tag_date_col, days_str, owner_part, fuse.message
-    );
-
-    if use_color {
-        let colored_line = match fuse.status {
-            Status::Detonated => line.red().bold().to_string(),
-            Status::Ticking => line.yellow().to_string(),
-            Status::Inert => line.dimmed().to_string(),
-        };
-        println!("{}", colored_line);
-    } else {
-        println!("{}", line);
-    }
+    print_fuse_line(fuse, use_color, today, AgeStyle::Compact);
 }
 
 // ─── JSON formatter ───────────────────────────────────────────────────────────
@@ -297,6 +307,43 @@ pub fn print_json_list(fuses: &[&Fuse]) {
     }
 }
 
+/// Write a slice of fuses as a JSON array to any `Write` sink (used by `manifest --output`).
+pub fn print_json_list_to_writer(
+    fuses: &[&Fuse],
+    writer: impl std::io::Write,
+) -> std::io::Result<()> {
+    let items: Vec<JsonFuse> = fuses.iter().map(|f| JsonFuse::from_fuse(f)).collect();
+    serde_json::to_writer_pretty(writer, &items).map_err(std::io::Error::other)
+}
+
+// ─── CSV formatter ────────────────────────────────────────────────────────────
+
+/// Wrap a CSV field in quotes if it contains a comma, quote, or newline.
+fn csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// Print fuses as CSV to stdout (used by `manifest --format csv`).
+pub fn print_csv_list(fuses: &[&Fuse]) {
+    println!("file,line,tag,date,owner,status,message");
+    for fuse in fuses {
+        println!(
+            "{},{},{},{},{},{},{}",
+            csv_field(&fuse.file.display().to_string()),
+            fuse.line,
+            csv_field(&fuse.tag),
+            csv_field(&fuse.date_str()),
+            csv_field(fuse.owner.as_deref().unwrap_or("")),
+            fuse.status.as_str(),
+            csv_field(&fuse.message),
+        );
+    }
+}
+
 // ─── GitHub Actions formatter ─────────────────────────────────────────────────
 
 /// Print fuses in GitHub Actions workflow command format.
@@ -362,7 +409,9 @@ pub fn print_scan_result(
     today: NaiveDate,
 ) {
     match format {
-        OutputFormat::Terminal => print_terminal(result, fuse_days, false, today),
+        OutputFormat::Terminal | OutputFormat::Csv => {
+            print_terminal(result, fuse_days, false, today)
+        }
         OutputFormat::Json => print_json(result),
         OutputFormat::GitHub => print_github(result, fuse_days, today),
     }
@@ -392,6 +441,9 @@ pub fn print_list(
         }
         OutputFormat::GitHub => {
             print_github_list(fuses, fuse_days, today);
+        }
+        OutputFormat::Csv => {
+            print_csv_list(fuses);
         }
     }
 }

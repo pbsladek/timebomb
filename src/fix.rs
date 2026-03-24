@@ -20,22 +20,22 @@ use std::path::{Path, PathBuf};
 // Types
 // ---------------------------------------------------------------------------
 
-/// The action chosen by the user for a single expired annotation.
+/// The action chosen by the user for a single detonated fuse.
 enum FixAction {
     /// Replace the expiry date with this new date.
     Extend(NaiveDate),
-    /// Remove the annotation line entirely.
+    /// Remove the fuse line entirely.
     Delete,
-    /// Leave this annotation unchanged.
+    /// Leave this fuse unchanged.
     Skip,
 }
 
-/// A resolved decision pairing an action with the annotation it targets.
+/// A resolved decision pairing an action with the fuse it targets.
 struct Decision {
     action: FixAction,
-    /// Absolute path to the file containing the annotation.
+    /// Absolute path to the file containing the fuse.
     abs_path: PathBuf,
-    /// 1-based line number of the annotation.
+    /// 1-based line number of the fuse.
     line: usize,
 }
 
@@ -52,7 +52,7 @@ pub struct FixSummary {
 
 /// Core logic for `timebomb defuse`.
 ///
-/// Pass 1 — interactive: scan for expired annotations and prompt the user for
+/// Pass 1 — interactive: scan for detonated fuses and prompt the user for
 /// each one.
 ///
 /// Pass 2 — apply: group decisions by file, sort line numbers descending, and
@@ -60,7 +60,7 @@ pub struct FixSummary {
 ///
 /// Always returns `Ok(FixSummary)`; the caller exits 0.
 pub fn run_fix(scan_path: &Path, cfg: &Config, today: NaiveDate) -> Result<FixSummary> {
-    // Pass 1: collect expired annotations -----------------------------------
+    // Pass 1: collect detonated fuses ----------------------------------------
     let result = scan(scan_path, cfg, today)?;
     let detonated: Vec<&Fuse> = result.detonated();
 
@@ -78,7 +78,7 @@ pub fn run_fix(scan_path: &Path, cfg: &Config, today: NaiveDate) -> Result<FixSu
         detonated.len().to_string().red().bold()
     );
 
-    // Pass 1: prompt the user for each annotation ---------------------------
+    // Pass 1: prompt the user for each fuse ---------------------------------
     let mut decisions: Vec<Decision> = Vec::new();
 
     for ann in &detonated {
@@ -149,7 +149,7 @@ pub fn run_fix(scan_path: &Path, cfg: &Config, today: NaiveDate) -> Result<FixSu
 // Interactive prompt helpers
 // ---------------------------------------------------------------------------
 
-/// Prompt the user for an action on a single annotation.
+/// Prompt the user for an action on a single detonated fuse.
 ///
 /// Loops until a valid response is received. Returns `FixAction`.
 fn prompt_action(today: NaiveDate) -> Result<FixAction> {
@@ -176,8 +176,8 @@ fn prompt_action(today: NaiveDate) -> Result<FixAction> {
             "s" | "S" => return Ok(FixAction::Skip),
             "?" => {
                 println!("  e  — extend: enter a new expiry date (must be after today)");
-                println!("  d  — delete: remove the annotation line from the file");
-                println!("  s  — skip:   leave the annotation unchanged and continue");
+                println!("  d  — delete: remove the fuse line from the file");
+                println!("  s  — skip:   leave the fuse unchanged and continue");
             }
             "" => {
                 // EOF or empty line — treat as skip to avoid an infinite loop in
@@ -297,7 +297,8 @@ mod tests {
     }
 
     fn today() -> NaiveDate {
-        // Fixed date — well before fixture expired dates (2018–2021).
+        // Fixed date — well after fixture expired dates (2018–2021), so all
+        // fixture fuses are treated as detonated without depending on the wall clock.
         date("2026-03-22")
     }
 
@@ -316,7 +317,7 @@ mod tests {
         assert!(!content.contains("2020-01-01"), "old date should be gone");
     }
 
-    // ── remove_line via run_fix (simulated delete) ────────────────────────
+    // ── remove_line (the Delete path in run_fix) ──────────────────────────
 
     #[test]
     fn test_fix_delete_removes_line() {
@@ -328,7 +329,6 @@ mod tests {
         )
         .unwrap();
 
-        // Directly exercise remove_line (the Delete path in run_fix uses it).
         remove_line(&file, 2).unwrap();
 
         let content = fs::read_to_string(&file).unwrap();
@@ -336,21 +336,6 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0], "fn alpha() {}");
         assert_eq!(lines[1], "fn beta() {}");
-    }
-
-    // ── FixSummary counts ─────────────────────────────────────────────────
-
-    #[test]
-    fn test_fix_summary_counts_correct() {
-        // Build a FixSummary manually and verify field access.
-        let summary = FixSummary {
-            extended: 1,
-            deleted: 1,
-            skipped: 1,
-        };
-        assert_eq!(summary.extended, 1);
-        assert_eq!(summary.deleted, 1);
-        assert_eq!(summary.skipped, 1);
     }
 
     // ── bottom-up ordering prevents line-shift corruption ─────────────────
