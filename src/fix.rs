@@ -273,7 +273,14 @@ fn apply_extend(file_path: &Path, line_number: usize, new_date: NaiveDate) -> Re
         new_content.pop();
     }
 
-    std::fs::write(file_path, new_content).map_err(|e| Error::Io {
+    // Write atomically: temp file in the same directory, then rename so a
+    // mid-write crash never leaves a partially-written source file.
+    let tmp_path = file_path.with_extension(format!("tmp.{}", std::process::id()));
+    std::fs::write(&tmp_path, new_content).map_err(|e| Error::Io {
+        source: e,
+        path: Some(tmp_path.clone()),
+    })?;
+    std::fs::rename(&tmp_path, file_path).map_err(|e| Error::Io {
         source: e,
         path: Some(file_path.to_path_buf()),
     })?;

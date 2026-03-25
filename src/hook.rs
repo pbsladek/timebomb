@@ -37,9 +37,14 @@ fn hook_has_timebomb_block(content: &str) -> bool {
 }
 
 /// Remove the timebomb marker block from `content`, returning the cleaned string.
+///
+/// Preserves the original file's trailing-newline behaviour: if `content` did
+/// not end with `\n`, the returned string won't either.
 fn remove_timebomb_block(content: &str) -> String {
+    let had_trailing_newline = content.ends_with('\n');
     let mut out = String::with_capacity(content.len());
     let mut inside = false;
+    let mut first = true;
     for line in content.lines() {
         if line.trim() == MARKER_BEGIN {
             inside = true;
@@ -50,9 +55,15 @@ fn remove_timebomb_block(content: &str) -> String {
             continue;
         }
         if !inside {
+            if !first {
+                out.push('\n');
+            }
             out.push_str(line);
-            out.push('\n');
+            first = false;
         }
+    }
+    if !first && had_trailing_newline {
+        out.push('\n');
     }
     out
 }
