@@ -296,7 +296,9 @@ pub fn print_stats_month_terminal(result: &StatsResult) {
 /// Top-level dispatch.
 pub fn print_stats(result: &StatsResult, format: &OutputFormat) {
     match format {
-        OutputFormat::Terminal | OutputFormat::Csv => print_stats_terminal(result),
+        OutputFormat::Terminal | OutputFormat::Csv | OutputFormat::Table => {
+            print_stats_terminal(result)
+        }
         OutputFormat::Json => print_stats_json(result),
         OutputFormat::GitHub => print_stats_github(result),
     }
@@ -305,7 +307,9 @@ pub fn print_stats(result: &StatsResult, format: &OutputFormat) {
 /// Top-level dispatch for month breakdown.
 pub fn print_stats_month(result: &StatsResult, format: &OutputFormat) {
     match format {
-        OutputFormat::Terminal | OutputFormat::Csv => print_stats_month_terminal(result),
+        OutputFormat::Terminal | OutputFormat::Csv | OutputFormat::Table => {
+            print_stats_month_terminal(result)
+        }
         OutputFormat::Json => print_stats_json(result),
         OutputFormat::GitHub => {
             for row in &result.by_month {

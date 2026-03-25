@@ -116,9 +116,9 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 None => OutputFormat::auto_detect(),
             };
 
-            if format == OutputFormat::Csv {
+            if matches!(format, OutputFormat::Csv | OutputFormat::Table) {
                 return Err(Error::InvalidArgument(
-                    "--format csv is not supported for sweep; use terminal, json, or github"
+                    "--format csv and --format table are not supported for sweep; use terminal, json, or github"
                         .to_string(),
                 ));
             }
@@ -173,13 +173,13 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 if args.summary {
                     print_scan_summary(&result);
                 } else {
-                    print_scan_result(&result, &format, cfg.fuse_days, today);
+                    print_scan_result(&result, &format, cfg.fuse_days, today, args.stats);
                 }
             }
 
             // --output: write a JSON report to a file regardless of --format.
             if let Some(ref out_path) = args.output {
-                write_json_report(&result, Path::new(out_path)).map_err(|e| Error::Io {
+                write_json_report(&result, Path::new(out_path), today).map_err(|e| Error::Io {
                     source: e,
                     path: Some(PathBuf::from(out_path)),
                 })?;
@@ -363,9 +363,16 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                             path: Some(PathBuf::from(out_path)),
                         })?;
                     }
+                    OutputFormat::Table => {
+                        use timebomb::output::print_table_list_to_writer;
+                        print_table_list_to_writer(&fuses, file).map_err(|e| Error::Io {
+                            source: e,
+                            path: Some(PathBuf::from(out_path)),
+                        })?;
+                    }
                     _ => {
                         use timebomb::output::print_json_list_to_writer;
-                        print_json_list_to_writer(&fuses, file).map_err(|e| Error::Io {
+                        print_json_list_to_writer(&fuses, file, today).map_err(|e| Error::Io {
                             source: e,
                             path: Some(PathBuf::from(out_path)),
                         })?;

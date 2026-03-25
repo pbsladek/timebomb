@@ -123,6 +123,10 @@ pub struct SweepArgs {
     /// Hide inert (safe) fuses from output
     #[arg(long, default_value_t = false)]
     pub no_inert: bool,
+
+    /// Print a per-tag breakdown of detonated/ticking counts after the summary (terminal only)
+    #[arg(long, default_value_t = false)]
+    pub stats: bool,
 }
 
 /// Arguments for the `manifest` subcommand.
@@ -476,6 +480,8 @@ pub enum FormatArg {
     Github,
     /// Comma-separated values
     Csv,
+    /// Fixed-width aligned table (manifest only)
+    Table,
 }
 
 impl FormatArg {
@@ -486,6 +492,7 @@ impl FormatArg {
             FormatArg::Json => crate::output::OutputFormat::Json,
             FormatArg::Github => crate::output::OutputFormat::GitHub,
             FormatArg::Csv => crate::output::OutputFormat::Csv,
+            FormatArg::Table => crate::output::OutputFormat::Table,
         }
     }
 }
