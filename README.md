@@ -44,16 +44,40 @@ Each fuse is classified relative to the current date, which is derived once at s
 
 ## Installation
 
+### Pre-built binaries (fastest)
+
+Download the latest release binary for your platform from [GitHub Releases](https://github.com/pbsladek/timebomb/releases/latest):
+
 ```bash
-cargo install timebomb
+# Linux x86_64
+curl -sSL https://github.com/pbsladek/timebomb/releases/latest/download/timebomb-linux-x86_64 \
+  -o /usr/local/bin/timebomb && chmod +x /usr/local/bin/timebomb
+
+# macOS Apple Silicon
+curl -sSL https://github.com/pbsladek/timebomb/releases/latest/download/timebomb-macos-aarch64 \
+  -o /usr/local/bin/timebomb && chmod +x /usr/local/bin/timebomb
+
+# macOS Intel
+curl -sSL https://github.com/pbsladek/timebomb/releases/latest/download/timebomb-macos-x86_64 \
+  -o /usr/local/bin/timebomb && chmod +x /usr/local/bin/timebomb
+
+# Windows x86_64 (PowerShell)
+Invoke-WebRequest https://github.com/pbsladek/timebomb/releases/latest/download/timebomb-windows-x86_64.exe `
+  -OutFile timebomb.exe
 ```
 
-Or from source:
+### Via cargo
+
+```bash
+cargo install timebomb --locked
+```
+
+### From source
 
 ```bash
 git clone https://github.com/pbsladek/timebomb
 cd timebomb
-cargo install --path .
+cargo install --path . --locked
 ```
 
 ---
@@ -233,8 +257,18 @@ timebomb completions fish               # print fish completion script
 Pipe to your completions directory to enable tab-completion for all subcommands and flags:
 
 ```bash
+# zsh
 timebomb completions zsh > ~/.zsh/completions/_timebomb
-timebomb completions bash > /etc/bash_completion.d/timebomb
+
+# bash (user-level, no sudo required)
+mkdir -p ~/.local/share/bash-completion/completions
+timebomb completions bash > ~/.local/share/bash-completion/completions/timebomb
+
+# bash (system-wide, requires sudo)
+timebomb completions bash | sudo tee /etc/bash_completion.d/timebomb
+
+# fish
+timebomb completions fish > ~/.config/fish/completions/timebomb.fish
 ```
 
 ---
@@ -363,21 +397,16 @@ jobs:
   timebomb:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - run: cargo install timebomb
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install timebomb
+        run: |
+          curl -sSL https://github.com/pbsladek/timebomb/releases/latest/download/timebomb-linux-x86_64 \
+            -o /usr/local/bin/timebomb
+          chmod +x /usr/local/bin/timebomb
       - run: timebomb sweep --fuse 14d --fail-on-ticking
 ```
 
 `--format github` is inferred automatically from `GITHUB_ACTIONS=true`, so workflow command annotations appear in the PR diff without any extra flags.
-
-### GitLab CI
-
-```yaml
-timebomb:
-  stage: lint
-  script:
-    - timebomb sweep --fuse 14d
-```
 
 ### Pre-commit hook
 
