@@ -1,9 +1,10 @@
 # timebomb
 
 [![CI](https://github.com/pbsladek/timebomb/actions/workflows/ci.yml/badge.svg)](https://github.com/pbsladek/timebomb/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/timebomb.svg)](https://crates.io/crates/timebomb)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`timebomb` scans source code for structured expiry annotations and fails when any deadline has passed.
+Scan source code for deadline-tagged fuses and fail when they detonate.
 
 The problem it solves: `// TODO: remove this after the migration` gets written with good intentions and stays forever. `timebomb` makes the deadline explicit and machine-enforceable. When the date passes, the build fails — forcing a fix or a conscious decision to extend the deadline.
 

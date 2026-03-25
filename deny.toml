@@ -1,0 +1,47 @@
+# cargo deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+
+# ---------------------------------------------------------------------------
+# Advisories — RustSec CVE / vulnerability database
+# ---------------------------------------------------------------------------
+[advisories]
+# Warn on unmaintained crates rather than hard-failing, so CI stays green
+# while you evaluate the impact.
+ignore = []
+
+# ---------------------------------------------------------------------------
+# Licenses
+# ---------------------------------------------------------------------------
+[licenses]
+# Confidence threshold for license file detection (0.0–1.0).
+confidence-threshold = 0.8
+
+# Licenses that are allowed in the dependency tree.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  # Copyleft — acceptable for a CLI tool (not linked into user code).
+  "MPL-2.0",
+]
+
+# ---------------------------------------------------------------------------
+# Bans — reject or warn on specific crates / duplicate versions
+# ---------------------------------------------------------------------------
+[bans]
+# Warn when multiple versions of the same crate appear in the tree.
+multiple-versions = "warn"
+
+# Crates that must never appear in the dependency tree.
+deny = []
+
+# ---------------------------------------------------------------------------
+# Sources — restrict where crates may come from
+# ---------------------------------------------------------------------------
+[sources]
+# Only allow crates published to crates.io; reject git or path dependencies
+# that are not explicitly listed below.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

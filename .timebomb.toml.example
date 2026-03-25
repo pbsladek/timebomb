@@ -1,0 +1,186 @@
+# timebomb configuration example
+#
+# Copy this file to .timebomb.toml in the root of your project and adjust
+# the values to match your tech stack. All fields are optional — omitting
+# any field falls back to the built-in default.
+
+# ---------------------------------------------------------------------------
+# Triggers
+# ---------------------------------------------------------------------------
+# Tags to scan for. Matched case-insensitively.
+#
+# Default: ["TODO", "FIXME", "HACK", "TEMP", "REMOVEME", "DEBT", "STOPSHIP",
+#           "WORKAROUND", "DEPRECATED", "BUG"]
+triggers = [
+  "TODO", "FIXME", "HACK", "TEMP", "REMOVEME",
+  "DEBT", "STOPSHIP", "WORKAROUND", "DEPRECATED", "BUG",
+]
+
+# ---------------------------------------------------------------------------
+# Ticking window
+# ---------------------------------------------------------------------------
+# Flag fuses expiring within this many days as ticking. Set to 0 to disable.
+#
+# Default: 0
+fuse_days = 14
+
+# ---------------------------------------------------------------------------
+# Ratchet ceilings
+# ---------------------------------------------------------------------------
+# sweep exits 1 if the live count exceeds either ceiling.
+# Comment out to disable enforcement.
+#
+# Default: unset (no ceiling)
+# max_detonated = 0
+# max_ticking   = 10
+
+# ---------------------------------------------------------------------------
+# Exclusions
+# ---------------------------------------------------------------------------
+# Glob patterns matched against paths relative to the scan root.
+# ** matches across directory separators.
+#
+# Default: ["vendor/**", "node_modules/**", "*.min.js", ".git/**"]
+exclude = [
+  # Version control
+  ".git/**",
+  ".svn/**",
+  ".hg/**",
+
+  # Dependency trees
+  "vendor/**",
+  "node_modules/**",
+  ".venv/**",
+  "venv/**",
+  ".env/**",
+  "__pycache__/**",
+
+  # Build output
+  "target/**",          # Rust
+  "dist/**",
+  "build/**",
+  "out/**",
+  ".next/**",           # Next.js
+  ".nuxt/**",           # Nuxt.js
+  ".svelte-kit/**",     # SvelteKit
+  "_site/**",           # Jekyll / Eleventy
+  "public/build/**",
+
+  # Minified / generated assets
+  "*.min.js",
+  "*.min.css",
+  "*.bundle.js",
+  "*.chunk.js",
+
+  # Lock files and generated manifests
+  "Cargo.lock",
+  "package-lock.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+  "poetry.lock",
+  "Gemfile.lock",
+  "go.sum",
+
+  # Binary / compiled artefacts
+  "*.pb.go",            # protobuf generated
+  "*.pb.swift",
+  "*_generated.go",
+  "*_gen.go",
+
+  # Test snapshots and fixtures (adjust to taste)
+  "tests/fixtures/**",
+  "**/__snapshots__/**",
+  "**/*.snap",
+
+  # Documentation build output
+  "docs/_build/**",
+  "site/**",
+]
+
+# ---------------------------------------------------------------------------
+# Extensions
+# ---------------------------------------------------------------------------
+# File extensions to scan. Empty list scans all non-binary files.
+#
+# Default (built-in): rs, go, ts, js, py, rb, java, cs, fs, hs, php, clj,
+#                     lisp, rkt, ex, erl, c, cpp, d, swift, ml, lua, dart,
+#                     kt, sql, tf, yaml, yml
+extensions = [
+  # Rust
+  "rs",
+
+  # Go
+  "go",
+
+  # TypeScript / JavaScript
+  "ts", "tsx",
+  "js", "jsx",
+  "mjs", "cjs",
+
+  # Python
+  "py", "pyw",
+
+  # Ruby
+  "rb", "rake", "gemspec",
+
+  # JVM
+  "java",
+  "kt",           # Kotlin
+  "scala",
+  "groovy",
+  "gradle",
+
+  # .NET
+  "cs",           # C#
+  "fs",           # F#
+  "vb",
+
+  # Swift / Objective-C
+  "swift",
+  "m", "mm",
+
+  # C / C++
+  "c", "h",
+  "cpp", "cc", "cxx",
+  "hpp", "hh", "hxx",
+
+  # Functional / other compiled
+  "hs",           # Haskell
+  "ex", "exs",    # Elixir
+  "erl", "hrl",   # Erlang
+  "clj", "cljs",  # Clojure
+  "ml", "mli",    # OCaml
+  "rkt",          # Racket
+  "lisp", "el",   # Lisp / Emacs Lisp
+  "lua",
+  "dart",
+  "d",            # D
+
+  # PHP
+  "php",
+
+  # Shell
+  "sh", "bash", "zsh", "fish",
+
+  # Data / config
+  "sql",
+  "toml",
+  "yaml", "yml",
+  "json",         # only useful if your JSON files have comment-bearing variants
+  "jsonc",
+  "xml",
+  "proto",        # protobuf definitions
+
+  # Infrastructure / IaC
+  "tf", "tfvars", # Terraform / OpenTofu
+  "hcl",
+  "bicep",        # Azure Bicep
+  "pp",           # Puppet
+
+  # Docs / markup (useful for tracking TODOs in docs)
+  "md",
+  "mdx",
+  "rst",
+  "adoc",         # AsciiDoc
+  "tex",
+]

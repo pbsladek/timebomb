@@ -1,0 +1,55 @@
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  coverage:
+    name: Code coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install stable toolchain with llvm-tools
+        run: |
+          set -euo pipefail
+          rustup update stable
+          rustup default stable
+          rustup component add llvm-tools-preview
+
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-coverage-
+            ${{ runner.os }}-cargo-
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --version "0.6.16" --locked
+
+      - name: Generate coverage report
+        run: cargo llvm-cov --locked --all-features --lcov --output-path lcov.info
+
+      # Uncomment once CODECOV_TOKEN secret is configured in repo settings.
+      # - name: Upload coverage to Codecov
+      #   uses: codecov/codecov-action@1af58845a975a7985b0beb0cbe6fbbb71a41dbad  # v5
+      #   with:
+      #     files: lcov.info
+      #     fail_ci_if_error: false
+      #     token: ${{ secrets.CODECOV_TOKEN }}
