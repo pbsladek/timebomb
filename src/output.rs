@@ -942,7 +942,7 @@ mod tests {
 
     #[test]
     fn test_print_table_list_does_not_panic() {
-        let fuses = vec![
+        let fuses = [
             make_fuse("TODO", "2020-01-01", Status::Detonated, "remove this"),
             make_fuse("FIXME", "2026-04-01", Status::Ticking, "fix soon"),
             make_fuse("HACK", "2099-01-01", Status::Inert, "far future"),
