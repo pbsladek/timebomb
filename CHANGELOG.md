@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/pbsladek/timebomb/compare/v0.2.0...v0.3.0) (2026-03-25)
+
+
+### Features
+
+* **cli:** add completions subcommand, CSV format, month intel, and manifest enhancements ([a161e56](https://github.com/pbsladek/timebomb/commit/a161e56c5be13c63ebc18670facd918eac3f4ea8))
+
 ## [0.2.0](https://github.com/pbsladek/timebomb/compare/v0.1.0...v0.2.0) (2026-03-24)
 
 
