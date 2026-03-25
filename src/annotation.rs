@@ -65,18 +65,27 @@ pub struct Fuse {
 impl Fuse {
     /// Compute the number of days until (or since) expiry relative to `today`.
     /// Positive means days remaining; negative means days overdue.
+    #[must_use]
     pub fn days_from_today(&self, today: NaiveDate) -> i64 {
         (self.date - today).num_days()
     }
 
     /// Returns true if this fuse has already detonated.
+    #[must_use]
     pub fn is_detonated(&self) -> bool {
         self.status == Status::Detonated
     }
 
     /// Returns true if this fuse is in the ticking window.
+    #[must_use]
     pub fn is_ticking(&self) -> bool {
         self.status == Status::Ticking
+    }
+
+    /// Returns true if this fuse is safely in the future.
+    #[must_use]
+    pub fn is_inert(&self) -> bool {
+        self.status == Status::Inert
     }
 
     /// Compute the status of a fuse given today's date and the fuse_days threshold.
@@ -220,6 +229,14 @@ mod tests {
         let fuse = make_fuse("2025-06-10", Status::Ticking);
         assert!(fuse.is_ticking());
         assert!(!fuse.is_detonated());
+    }
+
+    #[test]
+    fn test_is_inert() {
+        let fuse = make_fuse("2099-01-01", Status::Inert);
+        assert!(fuse.is_inert());
+        assert!(!fuse.is_detonated());
+        assert!(!fuse.is_ticking());
     }
 
     #[test]

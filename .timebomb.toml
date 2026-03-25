@@ -1,22 +1,23 @@
-# timebomb configuration file
-# Place this file in the root of your project.
-#
-# All fields are optional — omitting a field uses the built-in default.
+# timebomb configuration — scans the timebomb codebase itself.
+# All fields are optional; omitting a field uses the built-in default.
 
-# Trigger tags to scan for. Only fuses whose tag appears in this list will be
-# reported. Tags are matched case-insensitively, but stored uppercased.
+# Tags to scan for. Matched case-insensitively.
 #
-# Default: ["TODO", "FIXME", "HACK", "TEMP", "REMOVEME"]
-triggers = ["TODO", "FIXME", "HACK", "TEMP", "REMOVEME"]
+# Default: ["TODO", "FIXME", "HACK", "TEMP", "REMOVEME", "DEBT", "STOPSHIP",
+#           "WORKAROUND", "DEPRECATED", "BUG"]
+triggers = [
+  "TODO", "FIXME", "HACK", "TEMP", "REMOVEME",
+  "DEBT", "STOPSHIP", "WORKAROUND", "DEPRECATED", "BUG",
+]
 
-# Warn (and optionally fail with --fail-on-ticking) if a fuse's deadline is
-# within this many days. Set to 0 to disable the ticking window.
+# Flag fuses expiring within this many days as ticking.
+# 0 disables the ticking window entirely.
 #
 # Default: 0
 fuse_days = 14
 
-# Glob patterns for paths to exclude from scanning. Patterns are matched
-# against the path relative to the scan root. Use ** for recursive matching.
+# Glob patterns excluded from scanning, matched against the path relative to
+# the scan root.
 #
 # Default: ["vendor/**", "node_modules/**", "*.min.js", ".git/**"]
 exclude = [
@@ -25,37 +26,17 @@ exclude = [
   "*.min.js",
   ".git/**",
   "target/**",
-  "dist/**",
-  "build/**",
 ]
 
-# File extensions to scan. If this list is empty, timebomb will attempt to
-# scan all files that aren't detected as binary (i.e. contain no null bytes
-# in the first 8 KB). Add or remove extensions to match your tech stack.
+# File extensions to scan. Empty list means all non-binary files.
 #
-# Default: ["rs", "go", "ts", "js", "py", "rb", "java", "sql", "tf", "yaml", "yml"]
+# Default: rs, go, ts, js, py, rb, java, cs, fs, hs, php, clj, lisp, rkt,
+#          ex, erl, c, cpp, d, swift, ml, lua, dart, kt, sql, tf, yaml, yml
 extensions = [
   "rs",
-  "go",
-  "ts",
-  "js",
-  "py",
-  "rb",
-  "java",
-  "sql",
-  "tf",
+  "toml",
   "yaml",
   "yml",
-  "toml",
   "sh",
-  "bash",
-  "zsh",
   "md",
-  "swift",
-  "kt",
-  "scala",
-  "cs",
-  "cpp",
-  "c",
-  "h",
 ]

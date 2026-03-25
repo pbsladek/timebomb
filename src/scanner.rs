@@ -26,10 +26,7 @@ impl ScanResult {
     }
 
     pub fn inert(&self) -> Vec<&Fuse> {
-        self.fuses
-            .iter()
-            .filter(|a| a.status == crate::annotation::Status::Inert)
-            .collect()
+        self.fuses.iter().filter(|a| a.is_inert()).collect()
     }
 
     pub fn has_detonated(&self) -> bool {
@@ -132,7 +129,7 @@ pub fn scan(root: &Path, config: &Config, today: NaiveDate) -> Result<ScanResult
         .map(|c| {
             let bytes = std::fs::read(&c.abs_path).map_err(|e| Error::Io {
                 source: e,
-                path: Some(c.abs_path.clone()),
+                path: Some(c.abs_path.to_path_buf()),
             })?;
             // Reject oversized files to avoid processing giant blobs; check after
             // read so we only make one syscall instead of stat + read.
@@ -184,8 +181,9 @@ pub fn scan(root: &Path, config: &Config, today: NaiveDate) -> Result<ScanResult
 ///
 /// `abs_path` is used for reading; `rel_path` is stored in the `Fuse` for display.
 /// Binary files (detected via null-byte check) return an empty vec.
-/// Non-UTF-8 bytes are replaced with U+FFFD — intentional; binary files are
-/// already rejected by the null-byte check.
+/// Non-UTF-8 bytes in text files are replaced with U+FFFD; because binary
+/// files are rejected first, this replacement is a deliberate convenience for
+/// mixed-encoding text rather than a lossy fallback.
 pub fn scan_file(
     abs_path: &Path,
     rel_path: &Path,
@@ -622,16 +620,14 @@ line 6
     }
 
     #[test]
-    fn test_scan_sorted_by_date_ascending() {
+    fn test_scan_str_returns_fuses_in_line_order() {
+        // scan_str() preserves source order; date-ascending sort is done by scan() only.
         let src = "\
 // TODO[2099-12-31]: far future
 // FIXME[2020-01-01]: detonated
 // HACK[2050-06-15]: mid future
 ";
         let fuses = scan_str(src, Path::new("foo.rs"), &default_config(), today()).unwrap();
-        // scan_str doesn't sort; the full scan() call does. Test scan() sorting via a temp dir.
-        // (scan_str is not sorted — only scan() sorts)
-        // Verify that each item appears in the right order from the lines themselves:
         assert_eq!(fuses[0].tag, "TODO");
         assert_eq!(fuses[1].tag, "FIXME");
         assert_eq!(fuses[2].tag, "HACK");

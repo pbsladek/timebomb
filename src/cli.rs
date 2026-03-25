@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+pub use clap_complete::Shell;
 
 /// timebomb — enforce expiring TODO/FIXME fuses in source code
 #[derive(Debug, Parser)]
@@ -27,7 +28,7 @@ pub enum Command {
     /// Insert a timebomb fuse into a source file
     Plant(PlantArgs),
 
-    /// Bump the expiry date on an existing fuse without editing the file
+    /// Bump the expiry date on an existing fuse in-place
     Delay(DelayArgs),
 
     /// Remove a fuse from a source file
@@ -47,6 +48,9 @@ pub enum Command {
 
     /// Save or show the fuse count baseline for ratchet enforcement
     Bunker(BunkerArgs),
+
+    /// Print a shell completion script to stdout
+    Completions(CompletionsArgs),
 }
 
 /// Arguments for the `sweep` subcommand.
@@ -115,6 +119,10 @@ pub struct SweepArgs {
     /// Write a JSON report to this file in addition to normal output
     #[arg(long, value_name = "FILE")]
     pub output: Option<String>,
+
+    /// Hide inert (safe) fuses from output
+    #[arg(long, default_value_t = false)]
+    pub no_inert: bool,
 }
 
 /// Arguments for the `manifest` subcommand.
@@ -171,6 +179,22 @@ pub struct ManifestArgs {
     /// Only show fuses with expiry dates in this range (inclusive), e.g. --between 2026-01-01 2026-06-30
     #[arg(long, num_args = 2, value_names = ["START", "END"])]
     pub between: Option<Vec<String>>,
+
+    /// Print only the count of matching fuses as a plain integer
+    #[arg(long, default_value_t = false)]
+    pub count: bool,
+
+    /// Hide inert (safe) fuses from output
+    #[arg(long, default_value_t = false)]
+    pub no_inert: bool,
+
+    /// Only show fuses with no explicit owner and no git blame result (combine with --blame)
+    #[arg(long, default_value_t = false)]
+    pub owner_missing: bool,
+
+    /// Write the matching fuses as a JSON file (in addition to stdout output)
+    #[arg(long, value_name = "FILE")]
+    pub output: Option<String>,
 }
 
 /// Arguments for the `plant` subcommand.
@@ -288,6 +312,14 @@ pub struct IntelArgs {
     /// Path to config file (default: .timebomb.toml in scan root or cwd)
     #[arg(long, value_name = "FILE")]
     pub config: Option<String>,
+
+    /// Only count fuses belonging to this owner (case-insensitive)
+    #[arg(long, value_name = "OWNER")]
+    pub owner: Option<String>,
+
+    /// Only count fuses with this tag (case-insensitive, e.g. "TODO")
+    #[arg(long, value_name = "TAG")]
+    pub tag: Option<String>,
 }
 
 /// Arguments for the `tripwire` subcommand.
@@ -402,6 +434,13 @@ pub struct BunkerShowArgs {
     pub fuse: Option<String>,
 }
 
+/// Arguments for the `completions` subcommand.
+#[derive(Debug, clap::Args)]
+pub struct CompletionsArgs {
+    /// Shell to generate completions for
+    pub shell: Shell,
+}
+
 /// The --sort flag value for `manifest`.
 #[derive(Debug, Clone, PartialEq, Eq, ValueEnum)]
 pub enum SortBy {
@@ -422,6 +461,8 @@ pub enum GroupBy {
     Owner,
     /// Break down by tag (TODO, FIXME, etc.)
     Tag,
+    /// Break down by expiry month (timeline view)
+    Month,
 }
 
 /// The --format flag value.
@@ -433,6 +474,8 @@ pub enum FormatArg {
     Json,
     /// GitHub Actions annotation format
     Github,
+    /// Comma-separated values
+    Csv,
 }
 
 impl FormatArg {
@@ -442,6 +485,7 @@ impl FormatArg {
             FormatArg::Terminal => crate::output::OutputFormat::Terminal,
             FormatArg::Json => crate::output::OutputFormat::Json,
             FormatArg::Github => crate::output::OutputFormat::GitHub,
+            FormatArg::Csv => crate::output::OutputFormat::Csv,
         }
     }
 }
@@ -834,6 +878,24 @@ mod tests {
         let cli = parse(&["timebomb", "manifest"]);
         match cli.command {
             Command::Manifest(args) => assert!(args.between.is_none()),
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_count_flag() {
+        let cli = parse(&["timebomb", "manifest", "--count"]);
+        match cli.command {
+            Command::Manifest(args) => assert!(args.count),
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_count_default_false() {
+        let cli = parse(&["timebomb", "manifest"]);
+        match cli.command {
+            Command::Manifest(args) => assert!(!args.count),
             _ => panic!("expected Manifest"),
         }
     }

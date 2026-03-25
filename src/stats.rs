@@ -24,6 +24,17 @@ pub struct TagRow {
     pub inert: usize,
 }
 
+/// One row in the month timeline breakdown.
+#[derive(Debug, Clone, Serialize)]
+pub struct MonthRow {
+    /// Expiry month in `YYYY-MM` format.
+    pub month: String,
+    pub total: usize,
+    pub detonated: usize,
+    pub ticking: usize,
+    pub inert: usize,
+}
+
 /// The complete stats result.
 #[derive(Debug, Serialize)]
 pub struct StatsResult {
@@ -33,13 +44,16 @@ pub struct StatsResult {
     pub total_inert: usize,
     pub by_owner: Vec<OwnerRow>,
     pub by_tag: Vec<TagRow>,
+    pub by_month: Vec<MonthRow>,
 }
 
 /// Compute stats from a slice of fuses.
 /// Rows are sorted: detonated count descending, then total descending, then name ascending.
+/// Month rows are sorted chronologically (ascending).
 pub fn compute_stats(fuses: &[Fuse]) -> StatsResult {
     let mut owner_map: HashMap<String, OwnerRow> = HashMap::new();
     let mut tag_map: HashMap<String, TagRow> = HashMap::new();
+    let mut month_map: HashMap<String, MonthRow> = HashMap::new();
 
     let mut total_fuses = 0usize;
     let mut total_detonated = 0usize;
@@ -47,10 +61,8 @@ pub fn compute_stats(fuses: &[Fuse]) -> StatsResult {
     let mut total_inert = 0usize;
 
     for fuse in fuses {
-        let owner_key = fuse
-            .owner
-            .clone()
-            .unwrap_or_else(|| "(unowned)".to_string());
+        // Use as_deref to avoid cloning the Option<String> before the entry() call.
+        let owner_key = fuse.owner.as_deref().unwrap_or("(unowned)");
 
         total_fuses += 1;
 
@@ -71,9 +83,9 @@ pub fn compute_stats(fuses: &[Fuse]) -> StatsResult {
 
         // Update owner row
         let orow = owner_map
-            .entry(owner_key.clone())
+            .entry(owner_key.to_string())
             .or_insert_with(|| OwnerRow {
-                owner: owner_key,
+                owner: owner_key.to_string(),
                 total: 0,
                 detonated: 0,
                 ticking: 0,
@@ -96,6 +108,23 @@ pub fn compute_stats(fuses: &[Fuse]) -> StatsResult {
         trow.detonated += is_detonated;
         trow.ticking += is_ticking;
         trow.inert += is_inert;
+
+        // Update month row — group by expiry month (YYYY-MM).
+        // The key is moved into entry(), so or_insert_with recomputes the format string
+        // for the MonthRow.month field rather than cloning or pre-computing it.
+        let mrow = month_map
+            .entry(fuse.date.format("%Y-%m").to_string())
+            .or_insert_with(|| MonthRow {
+                month: fuse.date.format("%Y-%m").to_string(),
+                total: 0,
+                detonated: 0,
+                ticking: 0,
+                inert: 0,
+            });
+        mrow.total += 1;
+        mrow.detonated += is_detonated;
+        mrow.ticking += is_ticking;
+        mrow.inert += is_inert;
     }
 
     let mut by_owner: Vec<OwnerRow> = owner_map.into_values().collect();
@@ -114,6 +143,10 @@ pub fn compute_stats(fuses: &[Fuse]) -> StatsResult {
             .then(a.tag.cmp(&b.tag))
     });
 
+    // Month rows: sorted chronologically ascending by YYYY-MM string.
+    let mut by_month: Vec<MonthRow> = month_map.into_values().collect();
+    by_month.sort_by(|a, b| a.month.cmp(&b.month));
+
     StatsResult {
         total_fuses,
         total_detonated,
@@ -121,6 +154,7 @@ pub fn compute_stats(fuses: &[Fuse]) -> StatsResult {
         total_inert,
         by_owner,
         by_tag,
+        by_month,
     }
 }
 
@@ -233,12 +267,56 @@ pub fn print_stats_github(result: &StatsResult) {
     }
 }
 
+/// Print the month timeline breakdown in terminal format.
+pub fn print_stats_month_terminal(result: &StatsResult) {
+    let use_color = color_enabled();
+    println!("BY MONTH");
+    println!("--------");
+    println!(
+        "{:<20}{:>8}{:>10}{:>8}{:>8}",
+        "MONTH", "TOTAL", "DETONATED", "TICKING", "INERT"
+    );
+    for row in &result.by_month {
+        println!(
+            "{:<20}{:>8}{}{:>8}{:>8}",
+            row.month,
+            row.total,
+            fmt_detonated(row.detonated, use_color),
+            row.ticking,
+            row.inert,
+        );
+    }
+    println!();
+    println!(
+        "{} fuse(s) total · {} detonated · {} ticking · {} inert",
+        result.total_fuses, result.total_detonated, result.total_ticking, result.total_inert,
+    );
+}
+
 /// Top-level dispatch.
 pub fn print_stats(result: &StatsResult, format: &OutputFormat) {
     match format {
-        OutputFormat::Terminal => print_stats_terminal(result),
+        OutputFormat::Terminal | OutputFormat::Csv => print_stats_terminal(result),
         OutputFormat::Json => print_stats_json(result),
         OutputFormat::GitHub => print_stats_github(result),
+    }
+}
+
+/// Top-level dispatch for month breakdown.
+pub fn print_stats_month(result: &StatsResult, format: &OutputFormat) {
+    match format {
+        OutputFormat::Terminal | OutputFormat::Csv => print_stats_month_terminal(result),
+        OutputFormat::Json => print_stats_json(result),
+        OutputFormat::GitHub => {
+            for row in &result.by_month {
+                if row.detonated > 0 {
+                    println!(
+                        "::warning ::MONTH {} has {} detonated fuse(s)",
+                        row.month, row.detonated
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -275,6 +353,7 @@ mod tests {
         assert_eq!(result.total_inert, 0);
         assert!(result.by_owner.is_empty());
         assert!(result.by_tag.is_empty());
+        assert!(result.by_month.is_empty());
     }
 
     #[test]
@@ -390,5 +469,94 @@ mod tests {
         ];
         let result = compute_stats(&fuses);
         print_stats_github(&result);
+    }
+
+    fn make_fuse_on_date(tag: &str, owner: Option<&str>, status: Status, date: NaiveDate) -> Fuse {
+        Fuse {
+            file: PathBuf::from("src/foo.rs"),
+            line: 1,
+            tag: tag.to_string(),
+            date,
+            owner: owner.map(|s| s.to_string()),
+            message: "test message".to_string(),
+            status,
+            blamed_owner: None,
+        }
+    }
+
+    #[test]
+    fn test_by_month_grouping() {
+        let fuses = vec![
+            make_fuse_on_date(
+                "TODO",
+                None,
+                Status::Detonated,
+                NaiveDate::from_ymd_opt(2020, 3, 15).unwrap(),
+            ),
+            make_fuse_on_date(
+                "FIXME",
+                None,
+                Status::Detonated,
+                NaiveDate::from_ymd_opt(2020, 3, 28).unwrap(),
+            ),
+            make_fuse_on_date(
+                "HACK",
+                None,
+                Status::Inert,
+                NaiveDate::from_ymd_opt(2099, 1, 1).unwrap(),
+            ),
+        ];
+        let result = compute_stats(&fuses);
+        assert_eq!(result.by_month.len(), 2);
+        // 2020-03 comes before 2099-01
+        assert_eq!(result.by_month[0].month, "2020-03");
+        assert_eq!(result.by_month[0].total, 2);
+        assert_eq!(result.by_month[0].detonated, 2);
+        assert_eq!(result.by_month[1].month, "2099-01");
+        assert_eq!(result.by_month[1].total, 1);
+        assert_eq!(result.by_month[1].inert, 1);
+    }
+
+    #[test]
+    fn test_by_month_sorted_chronologically() {
+        let fuses = vec![
+            make_fuse_on_date(
+                "TODO",
+                None,
+                Status::Inert,
+                NaiveDate::from_ymd_opt(2099, 6, 1).unwrap(),
+            ),
+            make_fuse_on_date(
+                "TODO",
+                None,
+                Status::Detonated,
+                NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
+            ),
+            make_fuse_on_date(
+                "TODO",
+                None,
+                Status::Detonated,
+                NaiveDate::from_ymd_opt(2020, 3, 1).unwrap(),
+            ),
+        ];
+        let result = compute_stats(&fuses);
+        let months: Vec<&str> = result.by_month.iter().map(|r| r.month.as_str()).collect();
+        assert_eq!(months, vec!["2020-01", "2020-03", "2099-06"]);
+    }
+
+    #[test]
+    fn test_by_month_empty() {
+        let result = compute_stats(&[]);
+        assert!(result.by_month.is_empty());
+    }
+
+    #[test]
+    fn test_print_stats_month_terminal_does_not_panic() {
+        let fuses = vec![
+            make_fuse("TODO", Some("alice"), Status::Detonated),
+            make_fuse("FIXME", None, Status::Ticking),
+        ];
+        let result = compute_stats(&fuses);
+        print_stats_month_terminal(&result);
     }
 }

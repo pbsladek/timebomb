@@ -30,18 +30,22 @@ All five must pass cleanly before any PR is merged.
 
 ```
 src/
-  main.rs        CLI entrypoint; resolve_config(); subcommand dispatch; exit codes
-  cli.rs         clap derive structs: Cli, Command, SweepArgs, ManifestArgs, …, FormatArg
+  main.rs        CLI entrypoint; resolve_config(); resolve_fuse_arg(); file_matches();
+                 status_order(); subcommand dispatch; exit codes
+  cli.rs         clap derive structs: Cli, Command, SweepArgs, ManifestArgs, …,
+                 FormatArg, SortBy, GroupBy, CompletionsArgs; re-exports clap_complete::Shell
   config.rs      .timebomb.toml loading, CLI overlay merging, glob exclusion, extension filter
   scanner.rs     scan(), scan_file(), scan_content(), build_regex(), is_binary()
   annotation.rs  Fuse struct, Status enum (Detonated/Ticking/Inert), compute_status()
-  output.rs      Terminal / JSON / GitHub Actions formatters
+  output.rs      Terminal / JSON / CSV / GitHub Actions formatters;
+                 age_col() compact age column; print_csv_list(); write_json_report()
   error.rs       Error enum, Result alias, parse_duration_days()
   blame.rs       git blame integration for --blame enrichment
   hook.rs        Pre-commit tripwire install / uninstall
   trend.rs       Report snapshot comparison (fallout command)
   report.rs      Report JSON generation and writing
-  stats.rs       Aggregate stats by owner / tag (intel command)
+  stats.rs       Aggregate stats by owner / tag / month (intel command);
+                 compute_stats(), print_stats(), print_stats_month()
   init.rs        timebomb init command
   add.rs         timebomb plant command (insert fuses)
   snooze.rs      timebomb delay command (bump deadlines in-place)
@@ -78,11 +82,12 @@ Everything in the codebase uses bomb/explosion terminology. Key mappings:
 | Insert a fuse | **plant** (subcommand) |
 | Bump a deadline | **delay** (subcommand) |
 | Remove a fuse | **disarm** (subcommand) |
-| Stats by owner/tag | **intel** (subcommand) |
+| Stats by owner/tag/month | **intel** (subcommand) |
 | Pre-commit hook | **tripwire** (subcommand: `set` / `cut`) |
 | Compare two snapshots | **fallout** (subcommand) |
 | Interactive resolve detonated fuses | **defuse** (subcommand) |
 | Baseline ratchet | **bunker** (subcommand: `save` / `show`) |
+| Shell completion scripts | **completions** (subcommand) |
 | Warning window (days) | **fuse_days** (config key) |
 | Max detonated ceiling | **max_detonated** (config key) |
 | Max ticking ceiling | **max_ticking** (config key) |
@@ -121,6 +126,32 @@ If you restructure `scan()`, preserve this boundary so the rayon step stays pure
 
 CLI flags (e.g. `--fuse`, `--fail-on-ticking`) are applied on top as `CliOverrides` after file loading. CLI always wins over file.
 
+### `--fuse` resolution and `TIMEBOMB_FUSE_DAYS`
+
+All six call sites that construct `CliOverrides::new(fuse, ...)` go through `resolve_fuse_arg(cli_fuse)` first:
+
+```rust
+fn resolve_fuse_arg(cli_fuse: Option<String>) -> Option<String> {
+    cli_fuse.or_else(|| {
+        std::env::var("TIMEBOMB_FUSE_DAYS").ok().map(|v| {
+            if v.ends_with('d') { v } else { format!("{}d", v) }
+        })
+    })
+}
+```
+
+Priority: `--fuse` CLI flag > `TIMEBOMB_FUSE_DAYS` env var > config file > default (0).
+
+### `--file` filter — three-step path matching
+
+`manifest --file` accepts multiple values. Each is matched via `file_matches(fuse_file, filter)` in `main.rs`:
+
+1. Strip a leading `./` or `.\` (shell tab-completion compatibility).
+2. If the filter contains glob metacharacters (`*`, `?`, `[`, `{`), compile and match with `globset`.
+3. Otherwise fall back to a component-aware suffix match (`Path::ends_with`).
+
+This means `src/auth.rs`, `./src/auth.rs`, and `src/auth/**` all work transparently.
+
 ### Exit codes
 
 | Code | Meaning |
@@ -142,6 +173,14 @@ CLI flags (e.g. `--fuse`, `--fail-on-ticking`) are applied on top as `CliOverrid
 ### Bunker ratchet
 
 `bunker save` writes `.timebomb-baseline.json` with the current detonated and ticking counts. `sweep` loads this file (if present) and calls `check_ratchet` — a pure function returning a `Vec<String>` of violation messages. Four independent checks: `max_detonated` ceiling, `max_ticking` ceiling, regression vs. baseline detonated, regression vs. baseline ticking. Any violation causes `sweep` to exit 1.
+
+### `intel --by month`
+
+`compute_stats` in `stats.rs` groups fuses by `fuse.date.format("%Y-%m")` into `MonthRow` entries stored in `by_month: Vec<MonthRow>` on `StatsResult`. Month rows are sorted chronologically (ascending YYYY-MM string sort). The `--by month` arm in main.rs dispatches to `print_stats_month(result, format)` instead of `print_stats`.
+
+### Shell completions
+
+`timebomb completions <shell>` uses `clap_complete::generate` with `Cli::command()` to print a completion script to stdout. `clap_complete::Shell` is re-exported from `cli.rs` as `pub use clap_complete::Shell` so the type is accessible to `main.rs` without an extra import.
 
 ---
 
@@ -182,15 +221,20 @@ When adding a new fixture file:
 
 ## Output formats
 
-Three formats are supported, selected via `--format` or auto-detected:
+Four formats are supported, selected via `--format` or auto-detected:
 
-| Format | Trigger |
-|--------|---------|
-| `terminal` | Default; respects `NO_COLOR` env var |
-| `json` | `--format json` |
-| `github` | `--format github` or `GITHUB_ACTIONS=true` env var |
+| Format | Trigger | Commands |
+|--------|---------|---------|
+| `terminal` | Default; respects `NO_COLOR` env var | all |
+| `json` | `--format json` | all |
+| `github` | `--format github` or `GITHUB_ACTIONS=true` env var | all |
+| `csv` | `--format csv` | `manifest` only; falls back to terminal elsewhere |
 
-GitHub Actions format emits `::error` and `::warning` annotation lines. Terminal format uses `colored` for `DETONATED` (red) / `TICKING` (yellow) / `INERT` (green) prefixes.
+- **Terminal**: `DETONATED` (red/bold) / `TICKING` (yellow) / `INERT` (dim). `manifest` adds a compact `age_col` column (`-Xd` overdue, `+Xd` future) between the date and owner fields. `sweep` uses the verbose `days_label` `"(X days overdue)"` form instead.
+- **CSV**: `print_csv_list` in `output.rs` writes a header row then one row per fuse. Fields are quoted per RFC 4180 via `csv_field()` if they contain commas, quotes, or newlines.
+- **GitHub Actions**: `::error` for detonated, `::warning` for ticking, inert silently skipped.
+
+When `Csv` is passed to a dispatch function that doesn't support it (`print_scan_result`, `print_stats`, `print_trend`), it falls back to the terminal formatter.
 
 ---
 
@@ -225,12 +269,13 @@ Already fixed:
 | Crate | Why |
 |-------|-----|
 | `clap` (derive) | Argument parsing with minimal boilerplate |
+| `clap_complete` | Shell completion script generation for bash/zsh/fish/elvish/powershell |
 | `walkdir` | Reliable, cross-platform recursive directory walking |
 | `regex` | Compiled, reusable fuse pattern matching |
 | `chrono` | `NaiveDate` arithmetic for expiry calculation |
 | `toml` + `serde` | `.timebomb.toml` deserialization |
 | `serde_json` | JSON output format and bunker baseline file I/O |
-| `globset` | Fast glob matching for exclude patterns |
+| `globset` | Fast glob matching for exclude patterns and `--file` filters |
 | `colored` | Terminal color; respects `NO_COLOR` automatically |
 | `rayon` | Data-parallel file scanning in Phase 2 |
 | `tempfile` (dev) | Isolated temp directories in integration tests |
@@ -248,3 +293,5 @@ Do not add new dependencies without a clear justification. Prefer extending exis
 - **Do not add language-specific parsers**. The scanner is intentionally language-agnostic.
 - **Do not apply edits top-down in `defuse` or `delay`**. Always apply bottom-up (descending line number) to avoid line-shift bugs.
 - **Do not use old names**. The rename from `Annotation`/`expired`/`check`/`list`/`fix` to `Fuse`/`detonated`/`sweep`/`manifest`/`defuse` is complete. Do not reintroduce the old terminology.
+- **Do not bypass `resolve_fuse_arg`**. All `CliOverrides::new(fuse, ...)` calls must go through this helper so `TIMEBOMB_FUSE_DAYS` is respected consistently.
+- **Do not use `OutputFormat::Csv` in dispatch functions that don't support it** without providing a terminal fallback. CSV is only meaningful for list output (`manifest`).

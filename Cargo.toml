@@ -3,7 +3,7 @@ name = "timebomb"
 version = "0.2.0"
 edition = "2021"
 rust-version = "1.80"
-description = "A CLI tool that scans source code for expiring TODO/FIXME annotations"
+description = "Scan source code for deadline-tagged fuses and fail when they detonate"
 license = "MIT"
 repository = "https://github.com/pbsladek/timebomb"
 
@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 walkdir = "2"
 regex = "1"
 chrono = "0.4"

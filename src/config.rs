@@ -236,7 +236,8 @@ impl Config {
         if globset.is_match(path) {
             return true;
         }
-        // Also try matching just the filename
+        // Also try matching just the filename so that patterns like `*.min.js`
+        // correctly exclude nested files (e.g. `dist/app.min.js`).
         if let Some(fname) = path.file_name() {
             if globset.is_match(Path::new(fname)) {
                 return true;

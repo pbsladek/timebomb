@@ -47,7 +47,7 @@ pub struct ReportDiff {
     pub snoozed: Vec<(ReportAnnotation, ReportAnnotation)>, // (old, new)
 }
 
-// ─── Helper for JSON diff serialisation ──────────────────────────────────────
+// ─── Helper for JSON diff serialization ──────────────────────────────────────
 
 #[derive(Serialize)]
 struct SnoozedPair<'a> {

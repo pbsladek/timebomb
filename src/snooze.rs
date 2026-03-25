@@ -1,7 +1,7 @@
-//! Logic for the `timebomb snooze` subcommand.
+//! Logic for the `timebomb delay` subcommand.
 //!
 //! This module implements the core logic for bumping the expiry date of an
-//! existing timebomb annotation in-place without manually editing the file.
+//! existing timebomb fuse in-place without manually editing the file.
 
 use crate::add::{find_matching_lines, parse_target};
 use crate::error::{Error, Result};
@@ -13,7 +13,7 @@ use std::path::PathBuf;
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Core logic for `timebomb snooze`.
+/// Core logic for `timebomb delay`.
 ///
 /// All parameters are primitives so this compiles independently of `cli.rs`
 /// changes.
@@ -225,7 +225,12 @@ pub fn resolve_new_date(
                 if trimmed.is_empty() {
                     90
                 } else {
-                    trimmed.parse::<u32>().unwrap_or(90)
+                    trimmed.parse::<u32>().map_err(|_| {
+                        Error::InvalidArgument(format!(
+                            "'{}' is not a valid number of days",
+                            trimmed
+                        ))
+                    })?
                 }
             };
             today

@@ -133,7 +133,7 @@ pub fn print_trend(trend: &TrendResult, format: &OutputFormat) {
             Err(e) => eprintln!("error serializing trend: {}", e),
         },
         OutputFormat::GitHub => print_trend_github(trend),
-        OutputFormat::Terminal => print_trend_terminal(trend),
+        OutputFormat::Terminal | OutputFormat::Csv => print_trend_terminal(trend),
     }
 }
 
