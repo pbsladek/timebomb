@@ -116,6 +116,13 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 None => OutputFormat::auto_detect(),
             };
 
+            if format == OutputFormat::Csv {
+                return Err(Error::InvalidArgument(
+                    "--format csv is not supported for sweep; use terminal, json, or github"
+                        .to_string(),
+                ));
+            }
+
             let mut result = scan(&scan_path, &cfg, today)?;
 
             if args.blame {
@@ -342,17 +349,28 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 print_list(&fuses, &format, cfg.fuse_days, &scan_path, today);
             }
 
-            // --output: write the filtered fuse list as a JSON file.
+            // --output: write the fuse list to a file in the requested format.
             if let Some(ref out_path) = args.output {
-                use timebomb::output::print_json_list_to_writer;
                 let file = std::fs::File::create(out_path).map_err(|e| Error::Io {
                     source: e,
                     path: Some(PathBuf::from(out_path)),
                 })?;
-                print_json_list_to_writer(&fuses, file).map_err(|e| Error::Io {
-                    source: e,
-                    path: Some(PathBuf::from(out_path)),
-                })?;
+                match format {
+                    OutputFormat::Csv => {
+                        use timebomb::output::print_csv_list_to_writer;
+                        print_csv_list_to_writer(&fuses, file).map_err(|e| Error::Io {
+                            source: e,
+                            path: Some(PathBuf::from(out_path)),
+                        })?;
+                    }
+                    _ => {
+                        use timebomb::output::print_json_list_to_writer;
+                        print_json_list_to_writer(&fuses, file).map_err(|e| Error::Io {
+                            source: e,
+                            path: Some(PathBuf::from(out_path)),
+                        })?;
+                    }
+                }
             }
 
             Ok(0)

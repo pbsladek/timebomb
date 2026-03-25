@@ -151,8 +151,15 @@ pub fn run_snooze(
         }
     }
 
-    // 11. Write the file -----------------------------------------------------
-    std::fs::write(&file_path, &new_content).map_err(|e| Error::Io {
+    // 11. Write the file atomically ------------------------------------------
+    // Write to a sibling temp file then rename so a mid-write crash never
+    // leaves a partially-written source file.
+    let tmp_path = file_path.with_extension(format!("tmp.{}", std::process::id()));
+    std::fs::write(&tmp_path, &new_content).map_err(|e| Error::Io {
+        source: e,
+        path: Some(tmp_path.clone()),
+    })?;
+    std::fs::rename(&tmp_path, &file_path).map_err(|e| Error::Io {
         source: e,
         path: Some(file_path.clone()),
     })?;

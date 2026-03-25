@@ -12,6 +12,14 @@ pub struct BlameInfo {
 /// 1-based line number → BlameInfo.
 /// Returns `None` if git blame fails (e.g. untracked file, not a git repo).
 pub fn blame_file(repo_root: &Path, file: &Path) -> Option<HashMap<usize, BlameInfo>> {
+    // Reject paths containing '..' to prevent traversal outside the repo root.
+    if file
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+
     let output = Command::new("git")
         .arg("blame")
         .arg("--porcelain")

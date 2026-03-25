@@ -109,7 +109,7 @@ pub fn parse_unified_diff(output: &str) -> HashMap<PathBuf, Vec<RangeInclusive<u
                 continue;
             };
 
-            let new_start: usize = caps[1].parse().unwrap_or(0);
+            let new_start: usize = caps[1].parse().unwrap_or(1);
             // Missing count means exactly one line
             let new_count: usize = caps
                 .get(2)

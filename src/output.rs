@@ -344,6 +344,28 @@ pub fn print_csv_list(fuses: &[&Fuse]) {
     }
 }
 
+/// Write fuses as CSV to any `Write` sink (used by `manifest --format csv --output file`).
+pub fn print_csv_list_to_writer(
+    fuses: &[&Fuse],
+    mut writer: impl std::io::Write,
+) -> std::io::Result<()> {
+    writeln!(writer, "file,line,tag,date,owner,status,message")?;
+    for fuse in fuses {
+        writeln!(
+            writer,
+            "{},{},{},{},{},{},{}",
+            csv_field(&fuse.file.display().to_string()),
+            fuse.line,
+            csv_field(&fuse.tag),
+            csv_field(&fuse.date_str()),
+            csv_field(fuse.owner.as_deref().unwrap_or("")),
+            fuse.status.as_str(),
+            csv_field(&fuse.message),
+        )?;
+    }
+    Ok(())
+}
+
 // ─── GitHub Actions formatter ─────────────────────────────────────────────────
 
 /// Print fuses in GitHub Actions workflow command format.
@@ -409,11 +431,11 @@ pub fn print_scan_result(
     today: NaiveDate,
 ) {
     match format {
-        OutputFormat::Terminal | OutputFormat::Csv => {
-            print_terminal(result, fuse_days, false, today)
-        }
+        OutputFormat::Terminal => print_terminal(result, fuse_days, false, today),
         OutputFormat::Json => print_json(result),
         OutputFormat::GitHub => print_github(result, fuse_days, today),
+        // CSV is not supported for sweep — callers must validate before reaching here.
+        OutputFormat::Csv => print_terminal(result, fuse_days, false, today),
     }
 }
 
