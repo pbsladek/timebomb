@@ -338,7 +338,7 @@ fn test_manifest_output_writes_valid_json() {
     let fuses: Vec<_> = result.fuses.iter().collect();
 
     let mut buf = Vec::new();
-    print_json_list_to_writer(&fuses, &mut buf).unwrap();
+    print_json_list_to_writer(&fuses, &mut buf, today()).unwrap();
 
     let parsed: serde_json::Value = serde_json::from_slice(&buf).unwrap();
     assert!(parsed.is_array());

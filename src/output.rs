@@ -16,6 +16,8 @@ pub enum OutputFormat {
     GitHub,
     /// Comma-separated values.
     Csv,
+    /// Fixed-width aligned table (manifest only).
+    Table,
 }
 
 impl OutputFormat {
@@ -36,6 +38,7 @@ impl OutputFormat {
             "json" => Some(OutputFormat::Json),
             "github" | "gh" => Some(OutputFormat::GitHub),
             "csv" => Some(OutputFormat::Csv),
+            "table" => Some(OutputFormat::Table),
             _ => None,
         }
     }
@@ -60,13 +63,65 @@ fn days_label(fuse: &Fuse, today: NaiveDate) -> String {
 }
 
 /// Print a `ScanResult` to stdout using the terminal (colored) format.
-pub fn print_terminal(result: &ScanResult, _fuse_days: u32, _show_ok: bool, today: NaiveDate) {
+pub fn print_terminal(
+    result: &ScanResult,
+    _fuse_days: u32,
+    _show_ok: bool,
+    today: NaiveDate,
+    show_stats: bool,
+) {
     let use_color = color_enabled();
     for fuse in &result.fuses {
         print_fuse_terminal(fuse, use_color, today);
     }
     println!();
     print_summary_line(result, use_color);
+    if show_stats {
+        print_tag_stats(result, use_color);
+    }
+}
+
+/// Print a per-tag breakdown of detonated/ticking counts to stderr.
+/// Only called for terminal format; silently skipped for JSON/GitHub.
+pub fn print_tag_stats(result: &ScanResult, use_color: bool) {
+    use std::collections::BTreeMap;
+
+    // Build tag -> (detonated, ticking) in one pass; skip inert-only tags.
+    let mut counts: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    for fuse in &result.fuses {
+        let entry = counts.entry(fuse.tag.as_str()).or_insert((0, 0));
+        match fuse.status {
+            Status::Detonated => entry.0 += 1,
+            Status::Ticking => entry.1 += 1,
+            Status::Inert => {}
+        }
+    }
+
+    let relevant: Vec<_> = counts
+        .iter()
+        .filter(|(_, (d, t))| *d > 0 || *t > 0)
+        .collect();
+
+    if relevant.is_empty() {
+        return;
+    }
+
+    eprintln!();
+    for (tag, (detonated, ticking)) in &relevant {
+        let line = format!(
+            "  {:<12}  {:>3} detonated  {:>3} ticking",
+            tag, detonated, ticking
+        );
+        if use_color {
+            if *detonated > 0 {
+                eprintln!("{}", line.red().bold());
+            } else {
+                eprintln!("{}", line.yellow());
+            }
+        } else {
+            eprintln!("{}", line);
+        }
+    }
 }
 
 /// Print only the summary line — used by `sweep --summary`.
@@ -213,6 +268,8 @@ pub struct JsonFuse<'a> {
     pub line: usize,
     pub tag: &'a str,
     pub date: String,
+    /// Days until expiry (positive) or overdue (negative).
+    pub days: i64,
     pub owner: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blamed_owner: Option<&'a str>,
@@ -221,12 +278,13 @@ pub struct JsonFuse<'a> {
 }
 
 impl<'a> JsonFuse<'a> {
-    fn from_fuse(fuse: &'a Fuse) -> Self {
+    fn from_fuse(fuse: &'a Fuse, today: NaiveDate) -> Self {
         JsonFuse {
             file: fuse.file.display().to_string(),
             line: fuse.line,
             tag: &fuse.tag,
             date: fuse.date_str(),
+            days: fuse.days_from_today(today),
             owner: fuse.owner.as_deref(),
             blamed_owner: fuse.blamed_owner.as_deref(),
             message: &fuse.message,
@@ -236,23 +294,23 @@ impl<'a> JsonFuse<'a> {
 }
 
 /// Print the full scan result as JSON to stdout.
-pub fn print_json(result: &ScanResult) {
+pub fn print_json(result: &ScanResult, today: NaiveDate) {
     let detonated: Vec<JsonFuse> = result
         .detonated()
         .iter()
-        .map(|f| JsonFuse::from_fuse(f))
+        .map(|f| JsonFuse::from_fuse(f, today))
         .collect();
 
     let ticking: Vec<JsonFuse> = result
         .ticking()
         .iter()
-        .map(|f| JsonFuse::from_fuse(f))
+        .map(|f| JsonFuse::from_fuse(f, today))
         .collect();
 
     let inert: Vec<JsonFuse> = result
         .inert()
         .iter()
-        .map(|f| JsonFuse::from_fuse(f))
+        .map(|f| JsonFuse::from_fuse(f, today))
         .collect();
 
     let output = JsonOutput {
@@ -270,21 +328,25 @@ pub fn print_json(result: &ScanResult) {
 }
 
 /// Serialize the scan result as JSON and write it to a file (used by `sweep --output`).
-pub fn write_json_report(result: &ScanResult, path: &Path) -> std::io::Result<()> {
+pub fn write_json_report(
+    result: &ScanResult,
+    path: &Path,
+    today: NaiveDate,
+) -> std::io::Result<()> {
     let detonated: Vec<JsonFuse> = result
         .detonated()
         .iter()
-        .map(|f| JsonFuse::from_fuse(f))
+        .map(|f| JsonFuse::from_fuse(f, today))
         .collect();
     let ticking: Vec<JsonFuse> = result
         .ticking()
         .iter()
-        .map(|f| JsonFuse::from_fuse(f))
+        .map(|f| JsonFuse::from_fuse(f, today))
         .collect();
     let inert: Vec<JsonFuse> = result
         .inert()
         .iter()
-        .map(|f| JsonFuse::from_fuse(f))
+        .map(|f| JsonFuse::from_fuse(f, today))
         .collect();
     let output = JsonOutput {
         swept_files: result.swept_files,
@@ -298,8 +360,11 @@ pub fn write_json_report(result: &ScanResult, path: &Path) -> std::io::Result<()
 }
 
 /// Serialize a slice of fuses as a JSON array (used by `manifest --format json`).
-pub fn print_json_list(fuses: &[&Fuse]) {
-    let items: Vec<JsonFuse> = fuses.iter().map(|f| JsonFuse::from_fuse(f)).collect();
+pub fn print_json_list(fuses: &[&Fuse], today: NaiveDate) {
+    let items: Vec<JsonFuse> = fuses
+        .iter()
+        .map(|f| JsonFuse::from_fuse(f, today))
+        .collect();
 
     match serde_json::to_string_pretty(&items) {
         Ok(json) => println!("{}", json),
@@ -311,8 +376,12 @@ pub fn print_json_list(fuses: &[&Fuse]) {
 pub fn print_json_list_to_writer(
     fuses: &[&Fuse],
     writer: impl std::io::Write,
+    today: NaiveDate,
 ) -> std::io::Result<()> {
-    let items: Vec<JsonFuse> = fuses.iter().map(|f| JsonFuse::from_fuse(f)).collect();
+    let items: Vec<JsonFuse> = fuses
+        .iter()
+        .map(|f| JsonFuse::from_fuse(f, today))
+        .collect();
     serde_json::to_writer_pretty(writer, &items).map_err(std::io::Error::other)
 }
 
@@ -361,6 +430,93 @@ pub fn print_csv_list_to_writer(
             csv_field(fuse.owner.as_deref().unwrap_or("")),
             fuse.status.as_str(),
             csv_field(&fuse.message),
+        )?;
+    }
+    Ok(())
+}
+
+// ─── Table formatter ──────────────────────────────────────────────────────────
+
+/// Compute column widths for the table format: (file, line, tag, status).
+fn compute_table_widths(fuses: &[&Fuse]) -> (usize, usize, usize, usize) {
+    let mut w_file = "FILE".len();
+    let mut w_line = "LINE".len();
+    let mut w_tag = "TAG".len();
+    let mut w_status = "STATUS".len();
+    for fuse in fuses {
+        w_file = w_file.max(fuse.file.display().to_string().len());
+        w_line = w_line.max(fuse.line.to_string().len());
+        w_tag = w_tag.max(fuse.tag.len());
+        w_status = w_status.max(fuse.status.as_str().len());
+    }
+    (w_file, w_line, w_tag, w_status)
+}
+
+/// Print fuses as a fixed-width aligned table to stdout (used by `manifest --format table`).
+pub fn print_table_list(fuses: &[&Fuse]) {
+    let (w_file, w_line, w_tag, w_status) = compute_table_widths(fuses);
+    println!(
+        "{:<w_file$}  {:>w_line$}  {:<w_tag$}  {:<10}  {:<w_status$}  MESSAGE",
+        "FILE",
+        "LINE",
+        "TAG",
+        "DATE",
+        "STATUS",
+        w_file = w_file,
+        w_line = w_line,
+        w_tag = w_tag,
+        w_status = w_status,
+    );
+    for fuse in fuses {
+        println!(
+            "{:<w_file$}  {:>w_line$}  {:<w_tag$}  {:<10}  {:<w_status$}  {}",
+            fuse.file.display(),
+            fuse.line,
+            fuse.tag,
+            fuse.date_str(),
+            fuse.status.as_str(),
+            fuse.message,
+            w_file = w_file,
+            w_line = w_line,
+            w_tag = w_tag,
+            w_status = w_status,
+        );
+    }
+}
+
+/// Write fuses as a fixed-width table to any `Write` sink (used by `manifest --format table --output`).
+pub fn print_table_list_to_writer(
+    fuses: &[&Fuse],
+    mut writer: impl std::io::Write,
+) -> std::io::Result<()> {
+    let (w_file, w_line, w_tag, w_status) = compute_table_widths(fuses);
+    writeln!(
+        writer,
+        "{:<w_file$}  {:>w_line$}  {:<w_tag$}  {:<10}  {:<w_status$}  MESSAGE",
+        "FILE",
+        "LINE",
+        "TAG",
+        "DATE",
+        "STATUS",
+        w_file = w_file,
+        w_line = w_line,
+        w_tag = w_tag,
+        w_status = w_status,
+    )?;
+    for fuse in fuses {
+        writeln!(
+            writer,
+            "{:<w_file$}  {:>w_line$}  {:<w_tag$}  {:<10}  {:<w_status$}  {}",
+            fuse.file.display(),
+            fuse.line,
+            fuse.tag,
+            fuse.date_str(),
+            fuse.status.as_str(),
+            fuse.message,
+            w_file = w_file,
+            w_line = w_line,
+            w_tag = w_tag,
+            w_status = w_status,
         )?;
     }
     Ok(())
@@ -429,13 +585,16 @@ pub fn print_scan_result(
     format: &OutputFormat,
     fuse_days: u32,
     today: NaiveDate,
+    show_stats: bool,
 ) {
     match format {
-        OutputFormat::Terminal => print_terminal(result, fuse_days, false, today),
-        OutputFormat::Json => print_json(result),
+        OutputFormat::Terminal => print_terminal(result, fuse_days, false, today, show_stats),
+        OutputFormat::Json => print_json(result, today),
         OutputFormat::GitHub => print_github(result, fuse_days, today),
-        // CSV is not supported for sweep — callers must validate before reaching here.
-        OutputFormat::Csv => print_terminal(result, fuse_days, false, today),
+        // CSV and Table are not supported for sweep — callers must validate before reaching here.
+        OutputFormat::Csv | OutputFormat::Table => {
+            print_terminal(result, fuse_days, false, today, show_stats)
+        }
     }
 }
 
@@ -459,13 +618,16 @@ pub fn print_list(
             eprintln!("{} fuse(s) listed", fuses.len());
         }
         OutputFormat::Json => {
-            print_json_list(fuses);
+            print_json_list(fuses, today);
         }
         OutputFormat::GitHub => {
             print_github_list(fuses, fuse_days, today);
         }
         OutputFormat::Csv => {
             print_csv_list(fuses);
+        }
+        OutputFormat::Table => {
+            print_table_list(fuses);
         }
     }
 }
@@ -541,8 +703,9 @@ mod tests {
 
     #[test]
     fn test_json_fuse_from_fuse() {
+        let today = fixed_today();
         let fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "remove this");
-        let j = JsonFuse::from_fuse(&fuse);
+        let j = JsonFuse::from_fuse(&fuse, today);
         assert_eq!(j.file, "src/foo.rs");
         assert_eq!(j.line, 42);
         assert_eq!(j.tag, "TODO");
@@ -550,21 +713,32 @@ mod tests {
         assert_eq!(j.owner, None);
         assert_eq!(j.message, "remove this");
         assert_eq!(j.status, "detonated");
+        assert!(j.days < 0, "detonated fuse should have negative days");
+    }
+
+    #[test]
+    fn test_json_fuse_days_positive_for_future() {
+        let today = fixed_today();
+        let fuse = make_fuse("HACK", "2099-01-01", Status::Inert, "far future");
+        let j = JsonFuse::from_fuse(&fuse, today);
+        assert!(j.days > 0, "future fuse should have positive days");
     }
 
     #[test]
     fn test_json_fuse_with_owner() {
+        let today = fixed_today();
         let fuse =
             make_fuse_with_owner("FIXME", "2099-01-01", Status::Inert, "upgrade later", "bob");
-        let j = JsonFuse::from_fuse(&fuse);
+        let j = JsonFuse::from_fuse(&fuse, today);
         assert_eq!(j.owner, Some("bob"));
         assert_eq!(j.status, "inert");
     }
 
     #[test]
     fn test_json_fuse_ticking_status() {
+        let today = fixed_today();
         let fuse = make_fuse("HACK", "2025-06-10", Status::Ticking, "temp hack");
-        let j = JsonFuse::from_fuse(&fuse);
+        let j = JsonFuse::from_fuse(&fuse, today);
         assert_eq!(j.status, "ticking");
     }
 
@@ -579,14 +753,13 @@ mod tests {
             swept_files: 5,
             skipped_files: 1,
         };
-        // Should not panic
-        print_json(&result);
+        print_json(&result, fixed_today());
     }
 
     #[test]
     fn test_print_json_list_does_not_panic() {
         let fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "detonated");
-        print_json_list(&[&fuse]);
+        print_json_list(&[&fuse], fixed_today());
     }
 
     #[test]
@@ -644,7 +817,7 @@ mod tests {
             swept_files: 3,
             skipped_files: 0,
         };
-        print_terminal(&result, 14, true, fixed_today());
+        print_terminal(&result, 14, true, fixed_today(), false);
     }
 
     #[test]
@@ -703,9 +876,9 @@ mod tests {
             swept_files: 1,
             skipped_files: 0,
         };
-        print_scan_result(&result, &OutputFormat::Terminal, 0, fixed_today());
-        print_scan_result(&result, &OutputFormat::Json, 0, fixed_today());
-        print_scan_result(&result, &OutputFormat::GitHub, 0, fixed_today());
+        print_scan_result(&result, &OutputFormat::Terminal, 0, fixed_today(), false);
+        print_scan_result(&result, &OutputFormat::Json, 0, fixed_today(), false);
+        print_scan_result(&result, &OutputFormat::GitHub, 0, fixed_today(), false);
     }
 
     // ── blamed_owner display ──────────────────────────────────────────────────
@@ -743,7 +916,7 @@ mod tests {
     fn test_json_fuse_includes_blamed_owner() {
         let mut fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "msg");
         fuse.blamed_owner = Some("dave".to_string());
-        let j = JsonFuse::from_fuse(&fuse);
+        let j = JsonFuse::from_fuse(&fuse, fixed_today());
         assert_eq!(j.blamed_owner, Some("dave"));
         assert_eq!(j.owner, None);
     }
@@ -751,7 +924,7 @@ mod tests {
     #[test]
     fn test_json_fuse_blamed_owner_absent_when_none() {
         let fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "msg");
-        let j = JsonFuse::from_fuse(&fuse);
+        let j = JsonFuse::from_fuse(&fuse, fixed_today());
         assert_eq!(j.blamed_owner, None);
         // The field is skip_serializing_if = None, so it must not appear in the JSON string.
         let json = serde_json::to_string(&j).unwrap();
@@ -763,6 +936,61 @@ mod tests {
         let mut fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "msg");
         fuse.blamed_owner = Some("eve".to_string());
         print_fuse_line_terminal(&fuse, false, fixed_today());
+    }
+
+    // ── table format ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_print_table_list_does_not_panic() {
+        let fuses = vec![
+            make_fuse("TODO", "2020-01-01", Status::Detonated, "remove this"),
+            make_fuse("FIXME", "2026-04-01", Status::Ticking, "fix soon"),
+            make_fuse("HACK", "2099-01-01", Status::Inert, "far future"),
+        ];
+        print_table_list(&fuses.iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_print_table_list_empty() {
+        // Should print header only without panicking.
+        print_table_list(&[]);
+    }
+
+    #[test]
+    fn test_output_format_parse_table() {
+        assert_eq!(
+            OutputFormat::parse_format("table"),
+            Some(OutputFormat::Table)
+        );
+    }
+
+    #[test]
+    fn test_print_tag_stats_does_not_panic() {
+        use crate::scanner::ScanResult;
+        let result = ScanResult {
+            fuses: vec![
+                make_fuse("TODO", "2020-01-01", Status::Detonated, "d1"),
+                make_fuse("TODO", "2020-06-01", Status::Detonated, "d2"),
+                make_fuse("FIXME", "2026-04-01", Status::Ticking, "t1"),
+                make_fuse("HACK", "2099-01-01", Status::Inert, "i1"),
+            ],
+            swept_files: 4,
+            skipped_files: 0,
+        };
+        print_tag_stats(&result, false);
+    }
+
+    #[test]
+    fn test_print_tag_stats_skips_inert_only_tags() {
+        use crate::scanner::ScanResult;
+        // HACK is inert-only; should not appear in stats output.
+        let result = ScanResult {
+            fuses: vec![make_fuse("HACK", "2099-01-01", Status::Inert, "fine")],
+            swept_files: 1,
+            skipped_files: 0,
+        };
+        // Just verify it doesn't panic; inert-only tags produce no output.
+        print_tag_stats(&result, false);
     }
 
     // ── days_label ────────────────────────────────────────────────────────────
