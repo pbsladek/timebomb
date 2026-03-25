@@ -16,7 +16,7 @@ env:
 
 jobs:
   fmt:
-    name: Rustfmt
+    name: fmt
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -31,7 +31,7 @@ jobs:
         run: cargo fmt --all -- --check
 
   clippy:
-    name: Clippy
+    name: clippy
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -57,7 +57,7 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
   unit-tests:
-    name: Unit Tests
+    name: unit tests
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -80,7 +80,7 @@ jobs:
         run: cargo test --locked --lib --bins --verbose
 
   integration-tests:
-    name: Integration Tests
+    name: integration tests
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -103,7 +103,7 @@ jobs:
         run: cargo test --locked --tests --verbose
 
   smoke-tests:
-    name: Smoke Tests
+    name: smoke tests
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     needs: [unit-tests, integration-tests, clippy]
@@ -169,7 +169,7 @@ jobs:
           retention-days: 1
 
   self-check:
-    name: Self Check (timebomb scans itself)
+    name: self check
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: [smoke-tests]
@@ -193,7 +193,7 @@ jobs:
         run: ./target/release/timebomb manifest ./src || true
 
   release:
-    name: Release
+    name: release
     runs-on: ubuntu-24.04
     # Only create releases on pushes to main, not on PRs.
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -211,7 +211,7 @@ jobs:
           release-type: rust
 
   publish-crate:
-    name: Publish to crates.io
+    name: publish crate
     runs-on: ubuntu-24.04
     needs: release
     if: needs.release.outputs.release_created == 'true'
@@ -239,7 +239,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   publish:
-    name: Publish (${{ matrix.asset_name }})
+    name: publish (${{ matrix.asset_name }})
     needs: release
     if: needs.release.outputs.release_created == 'true'
     timeout-minutes: 30
