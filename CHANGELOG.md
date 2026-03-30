@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/pbsladek/timebomb/compare/v0.3.0...v0.4.0) (2026-03-25)
+
+
+### Features
+
+* **output:** add table format for manifest and per-tag stats for sweep ([#7](https://github.com/pbsladek/timebomb/issues/7)) ([c148752](https://github.com/pbsladek/timebomb/commit/c14875223f0e53758a90bfd6af9081e8504f3c39))
+
 ## [0.3.0](https://github.com/pbsladek/timebomb/compare/v0.2.0...v0.3.0) (2026-03-25)
 
 
