@@ -12,6 +12,7 @@ use crate::scanner::scan;
 use crate::snooze::snooze_line;
 use chrono::NaiveDate;
 use colored::Colorize;
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -123,7 +124,7 @@ pub fn run_fix(scan_path: &Path, cfg: &Config, today: NaiveDate) -> Result<FixSu
 
     for (file_path, mut file_decisions) in by_file {
         // Sort by line number descending so edits don't shift subsequent lines.
-        file_decisions.sort_unstable_by(|a, b| b.line.cmp(&a.line));
+        file_decisions.sort_unstable_by_key(|d| Reverse(d.line));
 
         for d in file_decisions {
             match &d.action {

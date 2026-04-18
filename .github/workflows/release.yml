@@ -135,6 +135,7 @@ jobs:
       - name: Install dependencies
         run: ${{ matrix.packages_install }}
       - name: Build artifacts
+        shell: bash
         run: |
           set -euo pipefail
           # Actually do builds and make zips and whatnot

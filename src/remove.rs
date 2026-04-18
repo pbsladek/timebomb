@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::scanner::scan;
 use chrono::NaiveDate;
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -183,7 +184,7 @@ pub fn run_remove_all_expired(
     // 5. Remove lines from each file (bottom-up to preserve line numbers) ----
     for (file_path, mut line_numbers) in by_file {
         // Sort descending so we remove from bottom up
-        line_numbers.sort_unstable_by(|a, b| b.cmp(a));
+        line_numbers.sort_unstable_by_key(|line_number| Reverse(*line_number));
         line_numbers.dedup();
 
         for line_number in line_numbers {
