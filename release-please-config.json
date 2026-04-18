@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "rust",
+      "component": "timebomb",
+      "package-name": "timebomb-cli",
+      "include-component-in-tag": false
+    }
+  }
+}
