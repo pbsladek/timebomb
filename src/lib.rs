@@ -1,5 +1,6 @@
 pub mod add;
 pub mod annotation;
+pub mod armory;
 pub mod baseline;
 pub mod blame;
 pub mod cli;

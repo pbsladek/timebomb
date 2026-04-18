@@ -107,6 +107,18 @@ timebomb sweep --max-ticking 5
 
 `sweep` is the only command that exits non-zero. All other commands are informational and always exit 0.
 
+### `armory` — prioritize active fuses
+
+```bash
+timebomb armory                         # top detonated and ticking fuses
+timebomb armory --limit 5               # show the five most volatile fuses
+timebomb armory --owner alice           # only Alice's active fuses
+timebomb armory --tag FIXME             # only active FIXME fuses
+timebomb armory --fuse 14d              # include fuses ticking within 14 days
+```
+
+`armory` ranks detonated fuses first, with the most overdue at the top, then ticking fuses by soonest deadline. It always exits 0.
+
 ### `manifest` — list all fuses
 
 ```bash
