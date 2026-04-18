@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/pbsladek/timebomb/compare/v0.4.0...v0.4.1) (2026-04-18)
+
+
+### Bug Fixes
+
+* **build:** workflows  ([#9](https://github.com/pbsladek/timebomb/issues/9)) ([85d2735](https://github.com/pbsladek/timebomb/commit/85d27351aa8f04493868d9823165e6c1f9d0450c))
+
 ## [0.4.0](https://github.com/pbsladek/timebomb/compare/v0.3.0...v0.4.0) (2026-03-25)
 
 
