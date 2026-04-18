@@ -25,6 +25,9 @@ pub enum Command {
     /// List all fuses sorted by expiry date
     Manifest(ManifestArgs),
 
+    /// Show the most urgent detonated and ticking fuses
+    Armory(ArmoryArgs),
+
     /// Insert a timebomb fuse into a source file
     Plant(PlantArgs),
 
@@ -199,6 +202,38 @@ pub struct ManifestArgs {
     /// Write the matching fuses as a JSON file (in addition to stdout output)
     #[arg(long, value_name = "FILE")]
     pub output: Option<String>,
+}
+
+/// Arguments for the `armory` subcommand.
+#[derive(Debug, clap::Args)]
+pub struct ArmoryArgs {
+    /// Path to scan (default: current directory)
+    #[arg(default_value = ".")]
+    pub path: String,
+
+    /// Maximum number of fuses to show
+    #[arg(long, default_value_t = 10, value_name = "N")]
+    pub limit: usize,
+
+    /// Fuse-days threshold used for ticking classification (e.g. "14d")
+    #[arg(long, value_name = "DURATION")]
+    pub fuse: Option<String>,
+
+    /// Path to config file (default: .timebomb.toml in scan root or cwd)
+    #[arg(long, value_name = "FILE")]
+    pub config: Option<String>,
+
+    /// Enrich fuses without an explicit owner with git blame author
+    #[arg(long)]
+    pub blame: bool,
+
+    /// Only show fuses belonging to this owner (case-insensitive)
+    #[arg(long, value_name = "OWNER")]
+    pub owner: Option<String>,
+
+    /// Only show fuses with this tag (case-insensitive, e.g. "TODO")
+    #[arg(long, value_name = "TAG")]
+    pub tag: Option<String>,
 }
 
 /// Arguments for the `plant` subcommand.
@@ -706,6 +741,55 @@ mod tests {
         match cli.command {
             Command::Manifest(args) => assert!(args.next.is_none()),
             _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_armory_defaults() {
+        let cli = parse(&["timebomb", "armory"]);
+        match cli.command {
+            Command::Armory(args) => {
+                assert_eq!(args.path, ".");
+                assert_eq!(args.limit, 10);
+                assert!(args.fuse.is_none());
+                assert!(args.config.is_none());
+                assert!(!args.blame);
+                assert!(args.owner.is_none());
+                assert!(args.tag.is_none());
+            }
+            _ => panic!("expected Armory"),
+        }
+    }
+
+    #[test]
+    fn test_armory_all_flags() {
+        let cli = parse(&[
+            "timebomb",
+            "armory",
+            "./src",
+            "--limit",
+            "5",
+            "--fuse",
+            "14d",
+            "--config",
+            ".timebomb.toml",
+            "--blame",
+            "--owner",
+            "alice",
+            "--tag",
+            "FIXME",
+        ]);
+        match cli.command {
+            Command::Armory(args) => {
+                assert_eq!(args.path, "./src");
+                assert_eq!(args.limit, 5);
+                assert_eq!(args.fuse, Some("14d".to_string()));
+                assert_eq!(args.config, Some(".timebomb.toml".to_string()));
+                assert!(args.blame);
+                assert_eq!(args.owner, Some("alice".to_string()));
+                assert_eq!(args.tag, Some("FIXME".to_string()));
+            }
+            _ => panic!("expected Armory"),
         }
     }
 

@@ -1,5 +1,6 @@
 use timebomb::add::run_add;
 use timebomb::annotation;
+use timebomb::armory::{print_armory, select_armory_fuses};
 use timebomb::baseline;
 use timebomb::blame::enrich_with_blame;
 use timebomb::config::{self, load_config, CliOverrides};
@@ -383,6 +384,38 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             Ok(0)
         }
 
+        Command::Armory(args) => {
+            let scan_path = canonicalize_path(Path::new(&args.path))?;
+            let overrides = CliOverrides::new(resolve_fuse_arg(args.fuse), false);
+            let cfg = resolve_config(args.config.as_deref(), &scan_path, &overrides)?;
+
+            let mut result = scan(&scan_path, &cfg, today)?;
+
+            if args.blame {
+                enrich_with_blame(&mut result.fuses, &scan_path);
+            }
+
+            if let Some(ref owner_filter) = args.owner {
+                let lower = owner_filter.to_lowercase();
+                result.fuses.retain(|fuse| {
+                    fuse.owner
+                        .as_deref()
+                        .or(fuse.blamed_owner.as_deref())
+                        .map(|o| o.to_lowercase() == lower)
+                        .unwrap_or(false)
+                });
+            }
+
+            if let Some(ref tag_filter) = args.tag {
+                let lower = tag_filter.to_lowercase();
+                result.fuses.retain(|fuse| fuse.tag.to_lowercase() == lower);
+            }
+
+            let fuses = select_armory_fuses(&result.fuses, today, args.limit);
+            print_armory(&fuses, today);
+            Ok(0)
+        }
+
         Command::Plant(args) => run_add(
             &args.target,
             &args.tag,
@@ -754,6 +787,39 @@ mod tests {
         let cli = Cli::parse_from(["timebomb", "manifest", dir.path().to_str().unwrap()]);
         let code = run(cli, fixed_today()).unwrap();
         // manifest always exits 0
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn test_armory_exits_zero_with_detonated() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = std::fs::File::create(dir.path().join("old.rs")).unwrap();
+        writeln!(f, "// TODO[2020-01-01]: detonated").unwrap();
+
+        let cli = Cli::parse_from(["timebomb", "armory", dir.path().to_str().unwrap()]);
+        let code = run(cli, fixed_today()).unwrap();
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn test_armory_accepts_filters() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = std::fs::File::create(dir.path().join("old.rs")).unwrap();
+        writeln!(f, "// FIXME[2020-01-01][alice]: detonated").unwrap();
+        writeln!(f, "// TODO[2020-01-01][bob]: detonated").unwrap();
+
+        let cli = Cli::parse_from([
+            "timebomb",
+            "armory",
+            dir.path().to_str().unwrap(),
+            "--owner",
+            "alice",
+            "--tag",
+            "FIXME",
+            "--limit",
+            "1",
+        ]);
+        let code = run(cli, fixed_today()).unwrap();
         assert_eq!(code, 0);
     }
 
