@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/pbsladek/timebomb/compare/v0.4.1...v0.5.0) (2026-04-18)
+
+
+### Features
+
+* **armory:** add urgent active fuse view  ([#13](https://github.com/pbsladek/timebomb/issues/13)) ([68c92e7](https://github.com/pbsladek/timebomb/commit/68c92e757bc9ea7d45c6ac9ae59d5358be0ef58c))
+
 ## [0.4.1](https://github.com/pbsladek/timebomb/compare/v0.4.0...v0.4.1) (2026-04-18)
 
 
