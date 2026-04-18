@@ -436,6 +436,8 @@ Releases are automated via [release-please](https://github.com/googleapis/releas
 
 release-please opens a release PR that bumps `Cargo.toml` and drafts the changelog. Merging that PR creates the git tag and GitHub release automatically.
 
+The crates.io package is `timebomb-cli`, but the release component stays `timebomb` so release tags remain `vX.Y.Z` and the installed executable remains `timebomb`.
+
 ---
 
 ## Scanner behavior

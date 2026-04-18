@@ -201,6 +201,8 @@ jobs:
     permissions:
       contents: write       # create tags, GitHub releases, and push Cargo.toml version bumps
       pull-requests: write  # open and update the release PR
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
@@ -208,7 +210,8 @@ jobs:
       - id: release
         uses: googleapis/release-please-action@a02a34c4d625f9be7cb89156071d8567266a2445 # v4.2.0
         with:
-          release-type: rust
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
   publish-crate:
     name: publish crate
