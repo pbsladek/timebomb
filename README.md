@@ -1,7 +1,7 @@
 # timebomb
 
 [![CI](https://github.com/pbsladek/timebomb/actions/workflows/ci.yml/badge.svg)](https://github.com/pbsladek/timebomb/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/timebomb.svg)](https://crates.io/crates/timebomb)
+[![Crates.io](https://img.shields.io/crates/v/timebomb-cli.svg)](https://crates.io/crates/timebomb-cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Scan source code for deadline-tagged fuses and fail when they detonate.
@@ -69,7 +69,7 @@ Invoke-WebRequest https://github.com/pbsladek/timebomb/releases/latest/download/
 ### Via cargo
 
 ```bash
-cargo install timebomb --locked
+cargo install timebomb-cli --locked
 ```
 
 ### From source

@@ -789,7 +789,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "timebomb"
+name = "timebomb-cli"
 version = "0.4.1"
 dependencies = [
  "chrono",
