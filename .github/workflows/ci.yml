@@ -269,6 +269,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Install stable toolchain
+        shell: bash
         run: |
           set -euo pipefail
           rustup update stable
@@ -295,6 +296,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build release binary
+        shell: bash
         run: cargo build --release --locked --target "$TARGET"
         env:
           TARGET: ${{ matrix.target }}
@@ -307,6 +309,7 @@ jobs:
           TAG: ${{ needs.release.outputs.tag_name }}
           TARGET: ${{ matrix.target }}
           ASSET_NAME: ${{ matrix.asset_name }}
+        shell: bash
         run: |
           set -euo pipefail
           gh release upload "${TAG}" \
