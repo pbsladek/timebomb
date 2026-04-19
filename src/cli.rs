@@ -188,8 +188,12 @@ pub struct ManifestArgs {
     pub between: Option<Vec<String>>,
 
     /// Print only the count of matching fuses as a plain integer
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, conflicts_with = "path_only")]
     pub count: bool,
+
+    /// Print only unique file paths containing matching fuses
+    #[arg(long, default_value_t = false, conflicts_with_all = ["count", "output"])]
+    pub path_only: bool,
 
     /// Hide inert (safe) fuses from output
     #[arg(long, default_value_t = false)]
@@ -225,8 +229,12 @@ pub struct ArmoryArgs {
     pub oldest: bool,
 
     /// Print only the number of detonated and ticking fuses
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, conflicts_with = "json")]
     pub count: bool,
+
+    /// Print the prioritized active fuse list as JSON
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
 
     /// Fuse-days threshold used for ticking classification (e.g. "14d")
     #[arg(long, value_name = "DURATION")]
@@ -766,6 +774,7 @@ mod tests {
                 assert_eq!(args.limit, 10);
                 assert!(!args.oldest);
                 assert!(!args.count);
+                assert!(!args.json);
                 assert!(args.fuse.is_none());
                 assert!(args.config.is_none());
                 assert!(!args.blame);
@@ -800,6 +809,7 @@ mod tests {
                 assert_eq!(args.limit, 5);
                 assert!(!args.oldest);
                 assert!(!args.count);
+                assert!(!args.json);
                 assert_eq!(args.fuse, Some("14d".to_string()));
                 assert_eq!(args.config, Some(".timebomb.toml".to_string()));
                 assert!(args.blame);
@@ -826,6 +836,21 @@ mod tests {
             Command::Armory(args) => assert!(args.count),
             _ => panic!("expected Armory"),
         }
+    }
+
+    #[test]
+    fn test_armory_json_flag() {
+        let cli = parse(&["timebomb", "armory", "--json"]);
+        match cli.command {
+            Command::Armory(args) => assert!(args.json),
+            _ => panic!("expected Armory"),
+        }
+    }
+
+    #[test]
+    fn test_armory_count_conflicts_with_json() {
+        let result = try_parse(&["timebomb", "armory", "--count", "--json"]);
+        assert!(result.is_err(), "--count and --json should conflict");
     }
 
     #[test]
@@ -1030,6 +1055,33 @@ mod tests {
             Command::Manifest(args) => assert!(!args.count),
             _ => panic!("expected Manifest"),
         }
+    }
+
+    #[test]
+    fn test_manifest_path_only_flag() {
+        let cli = parse(&["timebomb", "manifest", "--path-only"]);
+        match cli.command {
+            Command::Manifest(args) => assert!(args.path_only),
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_path_only_conflicts_with_count() {
+        let result = try_parse(&["timebomb", "manifest", "--path-only", "--count"]);
+        assert!(result.is_err(), "--path-only and --count should conflict");
+    }
+
+    #[test]
+    fn test_manifest_path_only_conflicts_with_output() {
+        let result = try_parse(&[
+            "timebomb",
+            "manifest",
+            "--path-only",
+            "--output",
+            "fuses.json",
+        ]);
+        assert!(result.is_err(), "--path-only and --output should conflict");
     }
 
     // ── plant subcommand ────────────────────────────────────────────────────────

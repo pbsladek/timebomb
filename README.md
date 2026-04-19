@@ -113,6 +113,7 @@ timebomb sweep --max-ticking 5
 timebomb armory                         # top detonated and ticking fuses
 timebomb armory --oldest                # show only the single most urgent fuse
 timebomb armory --count                 # print only the active fuse count
+timebomb armory --json                  # machine-readable prioritized list
 timebomb armory --limit 5               # show the five most volatile fuses
 timebomb armory --owner alice           # only Alice's active fuses
 timebomb armory --tag FIXME             # only active FIXME fuses
@@ -133,6 +134,7 @@ timebomb manifest --blame
 timebomb manifest --owner alice         # filter by owner
 timebomb manifest --tag TODO            # filter by tag
 timebomb manifest --owner-missing       # only fuses with no owner and no blame result
+timebomb manifest --path-only           # print unique files containing matching fuses
 timebomb manifest --no-inert            # hide inert fuses
 timebomb manifest --file src/auth.rs    # filter to a specific file (supports globs)
 timebomb manifest --file "src/auth/**"  # glob filter
