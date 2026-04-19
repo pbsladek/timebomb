@@ -212,8 +212,21 @@ pub struct ArmoryArgs {
     pub path: String,
 
     /// Maximum number of fuses to show
-    #[arg(long, default_value_t = 10, value_name = "N")]
+    #[arg(
+        long,
+        default_value_t = 10,
+        value_name = "N",
+        conflicts_with = "oldest"
+    )]
     pub limit: usize,
+
+    /// Show only the single most urgent fuse
+    #[arg(long, default_value_t = false)]
+    pub oldest: bool,
+
+    /// Print only the number of detonated and ticking fuses
+    #[arg(long, default_value_t = false)]
+    pub count: bool,
 
     /// Fuse-days threshold used for ticking classification (e.g. "14d")
     #[arg(long, value_name = "DURATION")]
@@ -751,6 +764,8 @@ mod tests {
             Command::Armory(args) => {
                 assert_eq!(args.path, ".");
                 assert_eq!(args.limit, 10);
+                assert!(!args.oldest);
+                assert!(!args.count);
                 assert!(args.fuse.is_none());
                 assert!(args.config.is_none());
                 assert!(!args.blame);
@@ -783,6 +798,8 @@ mod tests {
             Command::Armory(args) => {
                 assert_eq!(args.path, "./src");
                 assert_eq!(args.limit, 5);
+                assert!(!args.oldest);
+                assert!(!args.count);
                 assert_eq!(args.fuse, Some("14d".to_string()));
                 assert_eq!(args.config, Some(".timebomb.toml".to_string()));
                 assert!(args.blame);
@@ -791,6 +808,30 @@ mod tests {
             }
             _ => panic!("expected Armory"),
         }
+    }
+
+    #[test]
+    fn test_armory_oldest_flag() {
+        let cli = parse(&["timebomb", "armory", "--oldest"]);
+        match cli.command {
+            Command::Armory(args) => assert!(args.oldest),
+            _ => panic!("expected Armory"),
+        }
+    }
+
+    #[test]
+    fn test_armory_count_flag() {
+        let cli = parse(&["timebomb", "armory", "--count"]);
+        match cli.command {
+            Command::Armory(args) => assert!(args.count),
+            _ => panic!("expected Armory"),
+        }
+    }
+
+    #[test]
+    fn test_armory_oldest_conflicts_with_limit() {
+        let result = try_parse(&["timebomb", "armory", "--oldest", "--limit", "5"]);
+        assert!(result.is_err(), "--oldest and --limit should conflict");
     }
 
     #[test]

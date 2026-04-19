@@ -411,8 +411,19 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 result.fuses.retain(|fuse| fuse.tag.to_lowercase() == lower);
             }
 
-            let fuses = select_armory_fuses(&result.fuses, today, args.limit);
-            print_armory(&fuses, today);
+            let limit = if args.count {
+                usize::MAX
+            } else if args.oldest {
+                1
+            } else {
+                args.limit
+            };
+            let fuses = select_armory_fuses(&result.fuses, today, limit);
+            if args.count {
+                println!("{}", fuses.len());
+            } else {
+                print_armory(&fuses, today, args.oldest);
+            }
             Ok(0)
         }
 
@@ -818,6 +829,26 @@ mod tests {
             "FIXME",
             "--limit",
             "1",
+        ]);
+        let code = run(cli, fixed_today()).unwrap();
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn test_armory_count_exits_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = std::fs::File::create(dir.path().join("mixed.rs")).unwrap();
+        writeln!(f, "// FIXME[2020-01-01][alice]: detonated").unwrap();
+        writeln!(f, "// TODO[2025-06-03][bob]: ticking").unwrap();
+        writeln!(f, "// HACK[2099-01-01]: inert").unwrap();
+
+        let cli = Cli::parse_from([
+            "timebomb",
+            "armory",
+            dir.path().to_str().unwrap(),
+            "--fuse",
+            "7d",
+            "--count",
         ]);
         let code = run(cli, fixed_today()).unwrap();
         assert_eq!(code, 0);
