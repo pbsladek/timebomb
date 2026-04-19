@@ -111,6 +111,8 @@ timebomb sweep --max-ticking 5
 
 ```bash
 timebomb armory                         # top detonated and ticking fuses
+timebomb armory --oldest                # show only the single most urgent fuse
+timebomb armory --count                 # print only the active fuse count
 timebomb armory --limit 5               # show the five most volatile fuses
 timebomb armory --owner alice           # only Alice's active fuses
 timebomb armory --tag FIXME             # only active FIXME fuses

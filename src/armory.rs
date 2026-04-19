@@ -26,9 +26,15 @@ pub fn select_armory_fuses(fuses: &[Fuse], today: NaiveDate, limit: usize) -> Ve
 pub fn print_armory_to_writer<W: Write>(
     fuses: &[&Fuse],
     today: NaiveDate,
+    oldest: bool,
     mut writer: W,
 ) -> io::Result<()> {
-    writeln!(writer, "Most volatile fuses")?;
+    let heading = if oldest {
+        "Most volatile fuse"
+    } else {
+        "Most volatile fuses"
+    };
+    writeln!(writer, "{heading}")?;
 
     if fuses.is_empty() {
         writeln!(writer)?;
@@ -69,12 +75,12 @@ pub fn print_armory_to_writer<W: Write>(
 }
 
 /// Print the armory view to stdout.
-pub fn print_armory(fuses: &[&Fuse], today: NaiveDate) {
+pub fn print_armory(fuses: &[&Fuse], today: NaiveDate, oldest: bool) {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
     // stdout write failures are not expected in normal CLI use; keep the public
     // command path simple like the other terminal renderers in this crate.
-    let _ = print_armory_to_writer(fuses, today, &mut handle);
+    let _ = print_armory_to_writer(fuses, today, oldest, &mut handle);
 }
 
 fn armory_status_order(status: &Status) -> u8 {
@@ -165,7 +171,7 @@ mod tests {
         let today = date("2026-04-18");
         let mut out = Vec::new();
 
-        print_armory_to_writer(&[], today, &mut out).unwrap();
+        print_armory_to_writer(&[], today, false, &mut out).unwrap();
 
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("Most volatile fuses"));
@@ -186,12 +192,25 @@ mod tests {
         let selected = vec![&item];
         let mut out = Vec::new();
 
-        print_armory_to_writer(&selected, today, &mut out).unwrap();
+        print_armory_to_writer(&selected, today, false, &mut out).unwrap();
 
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("DETONATED"));
         assert!(text.contains("17d overdue"));
         assert!(text.contains("src/auth.rs:42"));
         assert!(text.contains("TODO[2026-04-01][alice]: remove fallback"));
+    }
+
+    #[test]
+    fn test_print_armory_to_writer_oldest_heading() {
+        let today = date("2026-04-18");
+        let item = fuse("src/auth.rs", 42, "2026-04-01", Status::Detonated, "old");
+        let selected = vec![&item];
+        let mut out = Vec::new();
+
+        print_armory_to_writer(&selected, today, true, &mut out).unwrap();
+
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.starts_with("Most volatile fuse\n"));
     }
 }
