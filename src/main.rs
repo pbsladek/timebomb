@@ -10,7 +10,8 @@ use timebomb::fix;
 use timebomb::git::{git_changed_files, is_git_repo};
 use timebomb::hook;
 use timebomb::output::{
-    print_list, print_scan_result, print_scan_summary, write_json_report, OutputFormat,
+    print_json_list, print_list, print_scan_result, print_scan_summary, write_json_report,
+    OutputFormat,
 };
 use timebomb::remove::{run_remove, run_remove_all_expired};
 use timebomb::scanner::scan;
@@ -21,6 +22,7 @@ use timebomb::trend;
 use chrono::Local;
 use clap::{CommandFactory, Parser};
 use clap_complete::generate;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process;
 use timebomb::cli::{BaselineCommand, Cli, Command, GroupBy, SortBy, TripwireCommand};
@@ -344,7 +346,12 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 fuses.truncate(n);
             }
 
-            if args.count {
+            if args.path_only {
+                let paths: BTreeSet<_> = fuses.iter().map(|fuse| &fuse.file).collect();
+                for path in paths {
+                    println!("{}", path.display());
+                }
+            } else if args.count {
                 println!("{}", fuses.len());
             } else {
                 print_list(&fuses, &format, cfg.fuse_days, &scan_path, today);
@@ -421,6 +428,8 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             let fuses = select_armory_fuses(&result.fuses, today, limit);
             if args.count {
                 println!("{}", fuses.len());
+            } else if args.json {
+                print_json_list(&fuses, today);
             } else {
                 print_armory(&fuses, today, args.oldest);
             }
@@ -850,6 +859,18 @@ mod tests {
             "7d",
             "--count",
         ]);
+        let code = run(cli, fixed_today()).unwrap();
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn test_armory_json_exits_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = std::fs::File::create(dir.path().join("mixed.rs")).unwrap();
+        writeln!(f, "// FIXME[2020-01-01][alice]: detonated").unwrap();
+        writeln!(f, "// HACK[2099-01-01]: inert").unwrap();
+
+        let cli = Cli::parse_from(["timebomb", "armory", dir.path().to_str().unwrap(), "--json"]);
         let code = run(cli, fixed_today()).unwrap();
         assert_eq!(code, 0);
     }
@@ -1471,6 +1492,23 @@ mod tests {
             "manifest",
             dir.path().to_str().unwrap(),
             "--count",
+        ]);
+        assert_eq!(run(cli, fixed_today()).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_manifest_path_only_exits_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = std::fs::File::create(dir.path().join("a.rs")).unwrap();
+        writeln!(a, "// TODO[2020-01-01]: detonated").unwrap();
+        let mut b = std::fs::File::create(dir.path().join("b.rs")).unwrap();
+        writeln!(b, "// FIXME[2025-06-02]: ticking").unwrap();
+
+        let cli = Cli::parse_from([
+            "timebomb",
+            "manifest",
+            dir.path().to_str().unwrap(),
+            "--path-only",
         ]);
         assert_eq!(run(cli, fixed_today()).unwrap(), 0);
     }
