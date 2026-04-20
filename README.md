@@ -97,6 +97,7 @@ timebomb sweep --format json            # machine-readable output
 timebomb sweep --format github          # GitHub Actions workflow commands
 timebomb sweep --tag FIXME              # only sweep fuses with this tag
 timebomb sweep --owner alice            # only sweep fuses owned by alice
+timebomb sweep --message oauth          # only sweep fuses whose message mentions oauth
 timebomb sweep --no-inert               # hide inert fuses from output
 timebomb sweep --quiet                  # suppress all output (exit code only)
 timebomb sweep --summary                # print only the summary line
@@ -117,6 +118,7 @@ timebomb armory --json                  # machine-readable prioritized list
 timebomb armory --limit 5               # show the five most volatile fuses
 timebomb armory --owner alice           # only Alice's active fuses
 timebomb armory --tag FIXME             # only active FIXME fuses
+timebomb armory --message oauth         # only active fuses whose message mentions oauth
 timebomb armory --fuse 14d              # include fuses ticking within 14 days
 ```
 
@@ -133,6 +135,7 @@ timebomb manifest --format csv          # CSV output for spreadsheets / scriptin
 timebomb manifest --blame
 timebomb manifest --owner alice         # filter by owner
 timebomb manifest --tag TODO            # filter by tag
+timebomb manifest --message oauth       # filter by message text
 timebomb manifest --owner-missing       # only fuses with no owner and no blame result
 timebomb manifest --path-only           # print unique files containing matching fuses
 timebomb manifest --no-inert            # hide inert fuses
@@ -208,6 +211,7 @@ timebomb intel --by owner
 timebomb intel --by tag
 timebomb intel --by month               # timeline view grouped by expiry month
 timebomb intel --by tag --format json
+timebomb intel --message oauth          # only count fuses whose message mentions oauth
 ```
 
 ### `tripwire` — manage the git pre-commit hook

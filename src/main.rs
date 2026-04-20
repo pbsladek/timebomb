@@ -86,6 +86,11 @@ fn file_matches(fuse_file: &Path, filter: &str) -> bool {
     fuse_file.ends_with(Path::new(normalized))
 }
 
+/// Returns true if the fuse message contains the user-supplied text.
+fn message_matches(fuse: &annotation::Fuse, filter: &str) -> bool {
+    fuse.message.to_lowercase().contains(&filter.to_lowercase())
+}
+
 /// Numeric order for status-based sorting: detonated first, then ticking, then inert.
 fn status_order(status: &timebomb::annotation::Status) -> u8 {
     match status {
@@ -160,6 +165,13 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             if let Some(ref tag_filter) = args.tag {
                 let lower = tag_filter.to_lowercase();
                 result.fuses.retain(|fuse| fuse.tag.to_lowercase() == lower);
+            }
+
+            // --message: retain only fuses whose message contains the filter text.
+            if let Some(ref message_filter) = args.message {
+                result
+                    .fuses
+                    .retain(|fuse| message_matches(fuse, message_filter));
             }
 
             // --no-inert: drop inert fuses from display only.
@@ -254,6 +266,13 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             if let Some(ref tag_filter) = args.tag {
                 let lower = tag_filter.to_lowercase();
                 result.fuses.retain(|fuse| fuse.tag.to_lowercase() == lower);
+            }
+
+            // --message: retain only fuses whose message contains the filter text.
+            if let Some(ref message_filter) = args.message {
+                result
+                    .fuses
+                    .retain(|fuse| message_matches(fuse, message_filter));
             }
 
             // --no-inert: drop inert fuses before status filtering.
@@ -418,6 +437,12 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 result.fuses.retain(|fuse| fuse.tag.to_lowercase() == lower);
             }
 
+            if let Some(ref message_filter) = args.message {
+                result
+                    .fuses
+                    .retain(|fuse| message_matches(fuse, message_filter));
+            }
+
             let limit = if args.count {
                 usize::MAX
             } else if args.oldest {
@@ -499,6 +524,12 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             if let Some(ref tag_filter) = args.tag {
                 let lower = tag_filter.to_lowercase();
                 result.fuses.retain(|fuse| fuse.tag.to_lowercase() == lower);
+            }
+
+            if let Some(ref message_filter) = args.message {
+                result
+                    .fuses
+                    .retain(|fuse| message_matches(fuse, message_filter));
             }
 
             let stats = compute_stats(&result.fuses);
@@ -667,10 +698,31 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
     use std::io::Write;
+    use std::sync::{Mutex, OnceLock};
     use timebomb::cli::Cli;
 
     fn fixed_today() -> NaiveDate {
         NaiveDate::parse_from_str("2025-06-01", "%Y-%m-%d").unwrap()
+    }
+
+    fn with_fuse_days_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let previous = std::env::var("TIMEBOMB_FUSE_DAYS").ok();
+
+        match value {
+            Some(v) => std::env::set_var("TIMEBOMB_FUSE_DAYS", v),
+            None => std::env::remove_var("TIMEBOMB_FUSE_DAYS"),
+        }
+
+        let result = f();
+
+        match previous {
+            Some(v) => std::env::set_var("TIMEBOMB_FUSE_DAYS", v),
+            None => std::env::remove_var("TIMEBOMB_FUSE_DAYS"),
+        }
+
+        result
     }
 
     // ── sweep subcommand ──────────────────────────────────────────────────────
@@ -1381,6 +1433,38 @@ mod tests {
     }
 
     #[test]
+    fn test_sweep_message_filter_no_match_exits_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = std::fs::File::create(dir.path().join("a.rs")).unwrap();
+        writeln!(f, "// TODO[2020-01-01]: remove legacy oauth").unwrap();
+
+        let cli = Cli::parse_from([
+            "timebomb",
+            "sweep",
+            dir.path().to_str().unwrap(),
+            "--message",
+            "billing",
+        ]);
+        assert_eq!(run(cli, fixed_today()).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_sweep_message_filter_match_exits_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = std::fs::File::create(dir.path().join("a.rs")).unwrap();
+        writeln!(f, "// TODO[2020-01-01]: remove legacy oauth").unwrap();
+
+        let cli = Cli::parse_from([
+            "timebomb",
+            "sweep",
+            dir.path().to_str().unwrap(),
+            "--message",
+            "OAUTH",
+        ]);
+        assert_eq!(run(cli, fixed_today()).unwrap(), 1);
+    }
+
+    #[test]
     fn test_sweep_quiet_suppresses_output_but_still_exits_one() {
         let dir = tempfile::tempdir().unwrap();
         let mut f = std::fs::File::create(dir.path().join("a.rs")).unwrap();
@@ -1518,32 +1602,25 @@ mod tests {
     #[test]
     fn test_resolve_fuse_arg_cli_wins_over_env() {
         // CLI value should take priority over env var
-        std::env::set_var("TIMEBOMB_FUSE_DAYS", "999");
-        let result = resolve_fuse_arg(Some("14d".to_string()));
-        std::env::remove_var("TIMEBOMB_FUSE_DAYS");
+        let result = with_fuse_days_env(Some("999"), || resolve_fuse_arg(Some("14d".to_string())));
         assert_eq!(result, Some("14d".to_string()));
     }
 
     #[test]
     fn test_resolve_fuse_arg_env_plain_number() {
-        std::env::set_var("TIMEBOMB_FUSE_DAYS", "30");
-        let result = resolve_fuse_arg(None);
-        std::env::remove_var("TIMEBOMB_FUSE_DAYS");
+        let result = with_fuse_days_env(Some("30"), || resolve_fuse_arg(None));
         assert_eq!(result, Some("30d".to_string()));
     }
 
     #[test]
     fn test_resolve_fuse_arg_env_with_d_suffix() {
-        std::env::set_var("TIMEBOMB_FUSE_DAYS", "30d");
-        let result = resolve_fuse_arg(None);
-        std::env::remove_var("TIMEBOMB_FUSE_DAYS");
+        let result = with_fuse_days_env(Some("30d"), || resolve_fuse_arg(None));
         assert_eq!(result, Some("30d".to_string()));
     }
 
     #[test]
     fn test_resolve_fuse_arg_none_when_no_env() {
-        std::env::remove_var("TIMEBOMB_FUSE_DAYS");
-        let result = resolve_fuse_arg(None);
+        let result = with_fuse_days_env(None, || resolve_fuse_arg(None));
         assert_eq!(result, None);
     }
 
@@ -1580,6 +1657,24 @@ mod tests {
     #[test]
     fn test_file_matches_glob_dotslash_stripped() {
         assert!(file_matches(Path::new("src/auth/login.rs"), "./src/**"));
+    }
+
+    #[test]
+    fn test_message_matches_case_insensitive_substring() {
+        let fuse = annotation::Fuse {
+            file: PathBuf::from("src/auth.rs"),
+            line: 1,
+            tag: "TODO".to_string(),
+            date: fixed_today(),
+            owner: None,
+            message: "Remove legacy OAuth after migration".to_string(),
+            status: annotation::Status::Inert,
+            blamed_owner: None,
+        };
+
+        assert!(message_matches(&fuse, "oauth"));
+        assert!(message_matches(&fuse, "LEGACY"));
+        assert!(!message_matches(&fuse, "billing"));
     }
 
     // ── canonicalize_path ─────────────────────────────────────────────────────
