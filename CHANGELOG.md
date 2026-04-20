@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/pbsladek/timebomb/compare/v0.6.0...v0.7.0) (2026-04-20)
+
+
+### Features
+
+* **cli:** add manifest path and armory json outputs ([#17](https://github.com/pbsladek/timebomb/issues/17)) ([accfe10](https://github.com/pbsladek/timebomb/commit/accfe10c7536021cd6f65cf024fcc893cf1bd270))
+* **cli:** add message filters to fuse commands  ([#18](https://github.com/pbsladek/timebomb/issues/18)) ([70af70e](https://github.com/pbsladek/timebomb/commit/70af70e6fd4020a6c4ecdd60cab65e8b28e4ba1b))
+
 ## [0.6.0](https://github.com/pbsladek/timebomb/compare/v0.5.0...v0.6.0) (2026-04-19)
 
 
