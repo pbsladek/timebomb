@@ -103,6 +103,10 @@ pub struct SweepArgs {
     #[arg(long, value_name = "TAG")]
     pub tag: Option<String>,
 
+    /// Only show fuses whose message contains this text (case-insensitive)
+    #[arg(long, value_name = "TEXT")]
+    pub message: Option<String>,
+
     /// Suppress all output; rely on the exit code only
     #[arg(long, default_value_t = false)]
     pub quiet: bool,
@@ -170,6 +174,10 @@ pub struct ManifestArgs {
     /// Only show fuses with this tag (case-insensitive, e.g. "TODO")
     #[arg(long, value_name = "TAG")]
     pub tag: Option<String>,
+
+    /// Only show fuses whose message contains this text (case-insensitive)
+    #[arg(long, value_name = "TEXT")]
+    pub message: Option<String>,
 
     /// Show only the N soonest-to-detonate fuses
     #[arg(long, value_name = "N")]
@@ -255,6 +263,10 @@ pub struct ArmoryArgs {
     /// Only show fuses with this tag (case-insensitive, e.g. "TODO")
     #[arg(long, value_name = "TAG")]
     pub tag: Option<String>,
+
+    /// Only show fuses whose message contains this text (case-insensitive)
+    #[arg(long, value_name = "TEXT")]
+    pub message: Option<String>,
 }
 
 /// Arguments for the `plant` subcommand.
@@ -380,6 +392,10 @@ pub struct IntelArgs {
     /// Only count fuses with this tag (case-insensitive, e.g. "TODO")
     #[arg(long, value_name = "TAG")]
     pub tag: Option<String>,
+
+    /// Only count fuses whose message contains this text (case-insensitive)
+    #[arg(long, value_name = "TEXT")]
+    pub message: Option<String>,
 }
 
 /// Arguments for the `tripwire` subcommand.
@@ -721,6 +737,15 @@ mod tests {
     }
 
     #[test]
+    fn test_sweep_message_flag() {
+        let cli = parse(&["timebomb", "sweep", "--message", "oauth"]);
+        match cli.command {
+            Command::Sweep(args) => assert_eq!(args.message, Some("oauth".to_string())),
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
     fn test_sweep_quiet_flag() {
         let cli = parse(&["timebomb", "sweep", "--quiet"]);
         match cli.command {
@@ -743,6 +768,15 @@ mod tests {
         let cli = parse(&["timebomb", "manifest", "--tag", "TODO"]);
         match cli.command {
             Command::Manifest(args) => assert_eq!(args.tag, Some("TODO".to_string())),
+            _ => panic!("expected Manifest"),
+        }
+    }
+
+    #[test]
+    fn test_manifest_message_flag() {
+        let cli = parse(&["timebomb", "manifest", "--message", "migration"]);
+        match cli.command {
+            Command::Manifest(args) => assert_eq!(args.message, Some("migration".to_string())),
             _ => panic!("expected Manifest"),
         }
     }
@@ -780,6 +814,7 @@ mod tests {
                 assert!(!args.blame);
                 assert!(args.owner.is_none());
                 assert!(args.tag.is_none());
+                assert!(args.message.is_none());
             }
             _ => panic!("expected Armory"),
         }
@@ -802,6 +837,8 @@ mod tests {
             "alice",
             "--tag",
             "FIXME",
+            "--message",
+            "migration",
         ]);
         match cli.command {
             Command::Armory(args) => {
@@ -815,6 +852,7 @@ mod tests {
                 assert!(args.blame);
                 assert_eq!(args.owner, Some("alice".to_string()));
                 assert_eq!(args.tag, Some("FIXME".to_string()));
+                assert_eq!(args.message, Some("migration".to_string()));
             }
             _ => panic!("expected Armory"),
         }
@@ -1356,6 +1394,7 @@ mod tests {
                 assert!(args.format.is_none());
                 assert!(args.fuse.is_none());
                 assert!(args.config.is_none());
+                assert!(args.message.is_none());
             }
             _ => panic!("expected Intel"),
         }
@@ -1393,6 +1432,8 @@ mod tests {
             "14d",
             "--config",
             "custom.toml",
+            "--message",
+            "cleanup",
         ]);
         match cli.command {
             Command::Intel(args) => {
@@ -1401,6 +1442,7 @@ mod tests {
                 assert_eq!(args.format, Some(FormatArg::Json));
                 assert_eq!(args.fuse, Some("14d".to_string()));
                 assert_eq!(args.config, Some("custom.toml".to_string()));
+                assert_eq!(args.message, Some("cleanup".to_string()));
             }
             _ => panic!("expected Intel"),
         }
@@ -1419,6 +1461,7 @@ mod tests {
                 assert!(args.format.is_none());
                 assert!(args.fuse.is_none());
                 assert!(args.config.is_none());
+                assert!(args.message.is_none());
             }
             _ => panic!("expected Manifest"),
         }
@@ -1492,6 +1535,8 @@ mod tests {
             "30d",
             "--config",
             "custom.toml",
+            "--message",
+            "migration",
         ]);
         match cli.command {
             Command::Manifest(args) => {
@@ -1500,6 +1545,7 @@ mod tests {
                 assert_eq!(args.format, Some(FormatArg::Github));
                 assert_eq!(args.fuse, Some("30d".to_string()));
                 assert_eq!(args.config, Some("custom.toml".to_string()));
+                assert_eq!(args.message, Some("migration".to_string()));
             }
             _ => panic!("expected Manifest"),
         }
