@@ -8,6 +8,16 @@ MAKEFLAGS     += --warn-undefined-variables --no-builtin-rules
 BINARY         := timebomb
 RELEASE_BINARY := target/release/$(BINARY)
 CARGO          := cargo
+DOCKER         ?= docker
+DOCKERFILE     ?= Dockerfile
+VERSION        ?= $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+IMAGE          ?= pwbsladek/timebomb
+IMAGE_TAG      ?= $(VERSION)
+IMAGE_REF      := $(IMAGE):$(IMAGE_TAG)
+IMAGE_LATEST   ?= $(IMAGE):latest
+PLATFORMS      ?= linux/amd64,linux/arm64
+DHI_RUST_IMAGE ?= dhi.io/rust:1-debian13-dev
+DHI_STATIC_IMAGE ?= dhi.io/static:20250419-glibc-debian13
 
 # Smoke-test working directory.  Override to avoid collisions on shared runners:
 #   make smoke SMOKE_DIR=/my/tmp/smoke
@@ -28,6 +38,7 @@ write-fixture = mkdir -p "$(SMOKE_DIR)/$(1)" && \
 
 .PHONY: help \
         build build-release build-dist \
+        docker-build docker-run docker-smoke docker-push \
         test-unit test-integration test test-nocapture bench bench-no-run \
         fmt fmt-check clippy lint \
         smoke smoke-empty smoke-list smoke-expired smoke-json smoke-github smoke-clean \
@@ -55,6 +66,32 @@ build-release:  ## Compile (release profile)
 
 build-dist:  ## Compile (dist profile — thin-LTO, matches release pipeline)
 	$(CARGO) build --profile dist
+
+docker-build:  ## Build the distroless DHI image locally (override IMAGE/IMAGE_TAG)
+	$(DOCKER) build \
+		--file $(DOCKERFILE) \
+		--build-arg RUST_IMAGE=$(DHI_RUST_IMAGE) \
+		--build-arg STATIC_IMAGE=$(DHI_STATIC_IMAGE) \
+		--tag $(IMAGE_REF) \
+		--tag $(IMAGE_LATEST) \
+		.
+
+docker-run: docker-build  ## Run the local image: make docker-run ARGS="--help"
+	$(DOCKER) run --rm $(IMAGE_REF) $(ARGS)
+
+docker-smoke: docker-build  ## Smoke-test the local image entrypoint
+	$(DOCKER) run --rm $(IMAGE_REF) --version
+
+docker-push:  ## Build and push a multi-platform DHI image with buildx
+	$(DOCKER) buildx build \
+		--platform $(PLATFORMS) \
+		--file $(DOCKERFILE) \
+		--build-arg RUST_IMAGE=$(DHI_RUST_IMAGE) \
+		--build-arg STATIC_IMAGE=$(DHI_STATIC_IMAGE) \
+		--tag $(IMAGE_REF) \
+		--tag $(IMAGE_LATEST) \
+		--push \
+		.
 
 ##@ Test
 
