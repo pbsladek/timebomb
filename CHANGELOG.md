@@ -1,6 +1,11 @@
 # Changelog
 
-## [0.7.1](https://github.com/pbsladek/timebomb/compare/v0.7.0...v0.7.1) (2026-04-25)
+## [0.8.0](https://github.com/pbsladek/timebomb/compare/v0.7.0...v0.8.0) (2026-04-25)
+
+
+### Features
+
+* **agent:** add explain, agent summary, and JSON fix-plan outputs
 
 
 ### Build System

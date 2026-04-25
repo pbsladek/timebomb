@@ -28,6 +28,9 @@ pub enum Command {
     /// Show the most urgent detonated and ticking fuses
     Armory(ArmoryArgs),
 
+    /// Explain one fuse and show agent-friendly remediation options
+    Explain(ExplainArgs),
+
     /// Insert a timebomb fuse into a source file
     Plant(PlantArgs),
 
@@ -114,6 +117,22 @@ pub struct SweepArgs {
     /// Print only the summary line, not individual fuses
     #[arg(long, default_value_t = false, conflicts_with = "quiet")]
     pub summary: bool,
+
+    /// Print a compact, deterministic summary for AI agents
+    #[arg(
+        long,
+        default_value_t = false,
+        conflicts_with_all = ["quiet", "summary", "format", "fix_plan"]
+    )]
+    pub agent_summary: bool,
+
+    /// Print a non-mutating remediation plan
+    #[arg(
+        long,
+        value_name = "FORMAT",
+        conflicts_with_all = ["quiet", "summary", "format", "agent_summary", "stats"]
+    )]
+    pub fix_plan: Option<FixPlanArg>,
 
     /// Hard ceiling on detonated fuses; sweep exits 1 if exceeded (overrides config)
     #[arg(long, value_name = "N")]
@@ -267,6 +286,30 @@ pub struct ArmoryArgs {
     /// Only show fuses whose message contains this text (case-insensitive)
     #[arg(long, value_name = "TEXT")]
     pub message: Option<String>,
+}
+
+/// Arguments for the `explain` subcommand.
+#[derive(Debug, clap::Args)]
+pub struct ExplainArgs {
+    /// Target fuse location, e.g. "src/main.rs:42"
+    #[arg(value_name = "FILE:LINE")]
+    pub target: String,
+
+    /// Directory to scan (default: current directory)
+    #[arg(long, default_value = ".", value_name = "PATH")]
+    pub path: String,
+
+    /// Fuse-days threshold used for status classification (e.g. "14d")
+    #[arg(long, value_name = "DURATION")]
+    pub fuse: Option<String>,
+
+    /// Path to config file (default: .timebomb.toml in scan root or cwd)
+    #[arg(long, value_name = "FILE")]
+    pub config: Option<String>,
+
+    /// Enrich the fuse with git blame author when it has no explicit owner
+    #[arg(long)]
+    pub blame: bool,
 }
 
 /// Arguments for the `plant` subcommand.
@@ -541,6 +584,13 @@ pub enum GroupBy {
     Month,
 }
 
+/// The --fix-plan flag value for `sweep`.
+#[derive(Debug, Clone, PartialEq, Eq, ValueEnum)]
+pub enum FixPlanArg {
+    /// Machine-readable JSON remediation plan
+    Json,
+}
+
 /// The --format flag value.
 #[derive(Debug, Clone, PartialEq, Eq, ValueEnum)]
 pub enum FormatArg {
@@ -595,6 +645,8 @@ mod tests {
                 assert!(args.format.is_none());
                 assert!(args.config.is_none());
                 assert!(args.since.is_none());
+                assert!(!args.agent_summary);
+                assert!(args.fix_plan.is_none());
             }
             _ => panic!("expected Sweep"),
         }
@@ -898,6 +950,47 @@ mod tests {
     }
 
     #[test]
+    fn test_explain_defaults() {
+        let cli = parse(&["timebomb", "explain", "src/main.rs:42"]);
+        match cli.command {
+            Command::Explain(args) => {
+                assert_eq!(args.target, "src/main.rs:42");
+                assert_eq!(args.path, ".");
+                assert!(args.fuse.is_none());
+                assert!(args.config.is_none());
+                assert!(!args.blame);
+            }
+            _ => panic!("expected Explain"),
+        }
+    }
+
+    #[test]
+    fn test_explain_all_flags() {
+        let cli = parse(&[
+            "timebomb",
+            "explain",
+            "src/main.rs:42",
+            "--path",
+            "./src",
+            "--fuse",
+            "14d",
+            "--config",
+            ".timebomb.toml",
+            "--blame",
+        ]);
+        match cli.command {
+            Command::Explain(args) => {
+                assert_eq!(args.target, "src/main.rs:42");
+                assert_eq!(args.path, "./src");
+                assert_eq!(args.fuse, Some("14d".to_string()));
+                assert_eq!(args.config, Some(".timebomb.toml".to_string()));
+                assert!(args.blame);
+            }
+            _ => panic!("expected Explain"),
+        }
+    }
+
+    #[test]
     fn test_sweep_summary_flag() {
         let cli = parse(&["timebomb", "sweep", "--summary"]);
         match cli.command {
@@ -910,6 +1003,42 @@ mod tests {
     fn test_sweep_summary_and_quiet_conflict() {
         let result = try_parse(&["timebomb", "sweep", "--summary", "--quiet"]);
         assert!(result.is_err(), "--summary and --quiet should conflict");
+    }
+
+    #[test]
+    fn test_sweep_agent_summary_flag() {
+        let cli = parse(&["timebomb", "sweep", "--agent-summary"]);
+        match cli.command {
+            Command::Sweep(args) => assert!(args.agent_summary),
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn test_sweep_agent_summary_conflicts_with_format() {
+        let result = try_parse(&["timebomb", "sweep", "--agent-summary", "--format", "json"]);
+        assert!(
+            result.is_err(),
+            "--agent-summary and --format should conflict"
+        );
+    }
+
+    #[test]
+    fn test_sweep_fix_plan_json_flag() {
+        let cli = parse(&["timebomb", "sweep", "--fix-plan", "json"]);
+        match cli.command {
+            Command::Sweep(args) => assert_eq!(args.fix_plan, Some(FixPlanArg::Json)),
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn test_sweep_fix_plan_conflicts_with_agent_summary() {
+        let result = try_parse(&["timebomb", "sweep", "--fix-plan", "json", "--agent-summary"]);
+        assert!(
+            result.is_err(),
+            "--fix-plan and --agent-summary should conflict"
+        );
     }
 
     #[test]
