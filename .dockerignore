@@ -1,0 +1,19 @@
+# Git and editor state
+.git
+.github
+.claude
+.DS_Store
+.idea
+.vscode
+*.swp
+*~
+
+# Local build artifacts
+target
+dist-manifest.json
+plan-dist-manifest.json
+
+# Local environment
+.env
+.env.local
+

@@ -72,6 +72,14 @@ Invoke-WebRequest https://github.com/pbsladek/timebomb/releases/latest/download/
 cargo install timebomb-cli --locked
 ```
 
+### Via Docker
+
+```bash
+docker run --rm -v "$PWD:/work" -w /work pwbsladek/timebomb:latest sweep .
+```
+
+The image is built from Docker Hardened Images: a DHI Rust builder and a distroless DHI static runtime.
+
 ### From source
 
 ```bash
@@ -79,6 +87,22 @@ git clone https://github.com/pbsladek/timebomb
 cd timebomb
 cargo install --path . --locked
 ```
+
+### Build and push the container image
+
+```bash
+make docker-build
+make docker-smoke
+make docker-push
+```
+
+Defaults push `pwbsladek/timebomb:<Cargo.toml version>` and `pwbsladek/timebomb:latest`. Override with `IMAGE`, `IMAGE_TAG`, or `PLATFORMS`:
+
+```bash
+make docker-push IMAGE=pwbsladek/timebomb IMAGE_TAG=0.7.0 PLATFORMS=linux/amd64,linux/arm64
+```
+
+GitHub Actions also pushes the Docker image on release when `release-please` creates a release tag, using `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets.
 
 ---
 
