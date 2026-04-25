@@ -125,6 +125,8 @@ timebomb sweep --message oauth          # only sweep fuses whose message mention
 timebomb sweep --no-inert               # hide inert fuses from output
 timebomb sweep --quiet                  # suppress all output (exit code only)
 timebomb sweep --summary                # print only the summary line
+timebomb sweep --agent-summary          # compact deterministic summary for AI agents
+timebomb sweep --fix-plan json          # machine-readable remediation plan
 timebomb sweep --output report.json     # also write a JSON report to a file
 timebomb sweep --max-detonated 0        # override ratchet ceiling for this run
 timebomb sweep --max-ticking 5
@@ -147,6 +149,16 @@ timebomb armory --fuse 14d              # include fuses ticking within 14 days
 ```
 
 `armory` ranks detonated fuses first, with the most overdue at the top, then ticking fuses by soonest deadline. It always exits 0.
+
+### `explain` — focus an agent on one fuse
+
+```bash
+timebomb explain src/auth/login.rs:42
+timebomb explain src/auth/login.rs:42 --path .
+timebomb explain src/auth/login.rs:42 --blame
+```
+
+`explain` scans the project, finds the fuse at `FILE:LINE`, and prints the annotation with a short remediation menu. It exits 0 when a fuse is found and exits 2 if the target line has no fuse.
 
 ### `manifest` — list all fuses
 
@@ -363,6 +375,45 @@ src/auth/login.rs,42,TODO,2026-01-15,,detonated,remove legacy oauth flow
 ```
 
 Fields containing commas or quotes are quoted per RFC 4180.
+
+### Agent summary (`sweep --agent-summary`)
+
+```text
+timebomb: failed
+swept_files: 142
+total_fuses: 17
+detonated: 2
+ticking: 1
+inert: 14
+next_action:
+- fix src/auth/login.rs:42 TODO[2025-01-15][alice]: remove legacy oauth flow
+```
+
+This format is intentionally compact and deterministic so agents can paste it into task reports or PR comments.
+
+### Fix plan (`sweep --fix-plan json`)
+
+```json
+{
+  "status": "failed",
+  "actions": [
+    {
+      "kind": "review_detonated",
+      "file": "src/auth/login.rs",
+      "line": 42,
+      "target": "src/auth/login.rs:42",
+      "tag": "TODO",
+      "date": "2025-01-15",
+      "owner": "alice",
+      "status": "detonated",
+      "message": "remove legacy oauth flow",
+      "command": "timebomb delay src/auth/login.rs:42 --date YYYY-MM-DD --reason \"...\""
+    }
+  ]
+}
+```
+
+The fix plan is non-mutating. It only includes detonated and ticking fuses.
 
 ### GitHub Actions (`--format github`)
 

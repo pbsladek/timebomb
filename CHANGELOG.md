@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/pbsladek/timebomb/compare/v0.7.0...v0.8.0) (2026-04-25)
+
+
+### Features
+
+* **agent:** add explain, agent summary, and JSON fix-plan outputs
+
+
+### Build System
+
+* **docker:** add DHI-based distroless Docker image publishing ([#20](https://github.com/pbsladek/timebomb/issues/20)) ([4a939a7](https://github.com/pbsladek/timebomb/commit/4a939a76146a5e9db95d810a70dfcc9ff1e78c46))
+
 ## [0.7.0](https://github.com/pbsladek/timebomb/compare/v0.6.0...v0.7.0) (2026-04-20)
 
 

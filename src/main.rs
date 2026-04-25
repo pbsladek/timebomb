@@ -1,4 +1,4 @@
-use timebomb::add::run_add;
+use timebomb::add::{parse_target, run_add};
 use timebomb::annotation;
 use timebomb::armory::{print_armory, select_armory_fuses};
 use timebomb::baseline;
@@ -10,8 +10,8 @@ use timebomb::fix;
 use timebomb::git::{git_changed_files, is_git_repo};
 use timebomb::hook;
 use timebomb::output::{
-    print_json_list, print_list, print_scan_result, print_scan_summary, write_json_report,
-    OutputFormat,
+    print_agent_summary, print_explain, print_fix_plan_json, print_json_list, print_list,
+    print_scan_result, print_scan_summary, write_json_report, OutputFormat,
 };
 use timebomb::remove::{run_remove, run_remove_all_expired};
 use timebomb::scanner::scan;
@@ -25,7 +25,7 @@ use clap_complete::generate;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process;
-use timebomb::cli::{BaselineCommand, Cli, Command, GroupBy, SortBy, TripwireCommand};
+use timebomb::cli::{BaselineCommand, Cli, Command, FixPlanArg, GroupBy, SortBy, TripwireCommand};
 
 fn main() {
     let cli = Cli::parse();
@@ -89,6 +89,32 @@ fn file_matches(fuse_file: &Path, filter: &str) -> bool {
 /// Returns true if the fuse message contains the user-supplied text.
 fn message_matches(fuse: &annotation::Fuse, filter: &str) -> bool {
     fuse.message.to_lowercase().contains(&filter.to_lowercase())
+}
+
+fn normalize_target_file(scan_path: &Path, target_file: &Path) -> timebomb::error::Result<PathBuf> {
+    if target_file.is_absolute() {
+        let canonical = canonicalize_path(target_file)?;
+        Ok(canonical
+            .strip_prefix(scan_path)
+            .unwrap_or(&canonical)
+            .to_path_buf())
+    } else {
+        let normalized = target_file
+            .strip_prefix("./")
+            .or_else(|_| target_file.strip_prefix(".\\"))
+            .unwrap_or(target_file);
+        Ok(normalized.to_path_buf())
+    }
+}
+
+fn find_fuse_at_target<'a>(
+    fuses: &'a [annotation::Fuse],
+    target_file: &Path,
+    target_line: usize,
+) -> Option<&'a annotation::Fuse> {
+    fuses
+        .iter()
+        .find(|fuse| fuse.line == target_line && fuse.file == target_file)
 }
 
 /// Numeric order for status-based sorting: detonated first, then ticking, then inert.
@@ -184,22 +210,6 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                     .retain(|fuse| fuse.status != timebomb::annotation::Status::Inert);
             }
 
-            if !args.quiet {
-                if args.summary {
-                    print_scan_summary(&result);
-                } else {
-                    print_scan_result(&result, &format, cfg.fuse_days, today, args.stats);
-                }
-            }
-
-            // --output: write a JSON report to a file regardless of --format.
-            if let Some(ref out_path) = args.output {
-                write_json_report(&result, Path::new(out_path), today).map_err(|e| Error::Io {
-                    source: e,
-                    path: Some(PathBuf::from(out_path)),
-                })?;
-            }
-
             // --max-detonated / --max-ticking: CLI overrides for ratchet ceilings.
             if let Some(n) = args.max_detonated {
                 cfg.max_detonated = Some(n as usize);
@@ -218,6 +228,30 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
                 cfg.max_detonated,
                 cfg.max_ticking,
             );
+
+            if !args.quiet {
+                if args.agent_summary {
+                    let failed = result.has_detonated()
+                        || (cfg.fail_on_ticking && result.is_ticking())
+                        || !violations.is_empty();
+                    print_agent_summary(&result, failed);
+                } else if let Some(FixPlanArg::Json) = args.fix_plan {
+                    print_fix_plan_json(&result);
+                } else if args.summary {
+                    print_scan_summary(&result);
+                } else {
+                    print_scan_result(&result, &format, cfg.fuse_days, today, args.stats);
+                }
+            }
+
+            // --output: write a JSON report to a file regardless of --format.
+            if let Some(ref out_path) = args.output {
+                write_json_report(&result, Path::new(out_path), today).map_err(|e| Error::Io {
+                    source: e,
+                    path: Some(PathBuf::from(out_path)),
+                })?;
+            }
+
             if !violations.is_empty() {
                 for v in &violations {
                     eprintln!("ratchet: {v}");
@@ -458,6 +492,31 @@ fn run(cli: Cli, today: chrono::NaiveDate) -> timebomb::error::Result<i32> {
             } else {
                 print_armory(&fuses, today, args.oldest);
             }
+            Ok(0)
+        }
+
+        Command::Explain(args) => {
+            let scan_path = canonicalize_path(Path::new(&args.path))?;
+            let overrides = CliOverrides::new(resolve_fuse_arg(args.fuse), false);
+            let cfg = resolve_config(args.config.as_deref(), &scan_path, &overrides)?;
+            let (target_file, target_line) = parse_target(&args.target)?;
+            let target_file = normalize_target_file(&scan_path, &target_file)?;
+
+            let mut result = scan(&scan_path, &cfg, today)?;
+
+            if args.blame {
+                enrich_with_blame(&mut result.fuses, &scan_path);
+            }
+
+            let fuse =
+                find_fuse_at_target(&result.fuses, &target_file, target_line).ok_or_else(|| {
+                    Error::InvalidArgument(format!(
+                        "no fuse found at {}:{}",
+                        target_file.display(),
+                        target_line
+                    ))
+                })?;
+            print_explain(fuse, today);
             Ok(0)
         }
 
@@ -848,6 +907,39 @@ mod tests {
         assert_eq!(code, 0);
     }
 
+    #[test]
+    fn test_sweep_agent_summary_exits_one_with_detonated() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = std::fs::File::create(dir.path().join("old.rs")).unwrap();
+        writeln!(f, "// TODO[2020-01-01]: detonated").unwrap();
+
+        let cli = Cli::parse_from([
+            "timebomb",
+            "sweep",
+            dir.path().to_str().unwrap(),
+            "--agent-summary",
+        ]);
+        let code = run(cli, fixed_today()).unwrap();
+        assert_eq!(code, 1);
+    }
+
+    #[test]
+    fn test_sweep_fix_plan_json_exits_one_with_detonated() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = std::fs::File::create(dir.path().join("old.rs")).unwrap();
+        writeln!(f, "// TODO[2020-01-01]: detonated").unwrap();
+
+        let cli = Cli::parse_from([
+            "timebomb",
+            "sweep",
+            dir.path().to_str().unwrap(),
+            "--fix-plan",
+            "json",
+        ]);
+        let code = run(cli, fixed_today()).unwrap();
+        assert_eq!(code, 1);
+    }
+
     // ── manifest subcommand ───────────────────────────────────────────────────
 
     #[test]
@@ -925,6 +1017,41 @@ mod tests {
         let cli = Cli::parse_from(["timebomb", "armory", dir.path().to_str().unwrap(), "--json"]);
         let code = run(cli, fixed_today()).unwrap();
         assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn test_explain_exits_zero_for_matching_fuse() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = std::fs::File::create(dir.path().join("old.rs")).unwrap();
+        writeln!(f, "fn main() {{}}").unwrap();
+        writeln!(f, "// TODO[2020-01-01][alice]: detonated").unwrap();
+
+        let cli = Cli::parse_from([
+            "timebomb",
+            "explain",
+            "old.rs:2",
+            "--path",
+            dir.path().to_str().unwrap(),
+        ]);
+        let code = run(cli, fixed_today()).unwrap();
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn test_explain_errors_when_no_fuse_at_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = std::fs::File::create(dir.path().join("old.rs")).unwrap();
+        writeln!(f, "fn main() {{}}").unwrap();
+
+        let cli = Cli::parse_from([
+            "timebomb",
+            "explain",
+            "old.rs:1",
+            "--path",
+            dir.path().to_str().unwrap(),
+        ]);
+        let result = run(cli, fixed_today());
+        assert!(result.is_err());
     }
 
     #[test]

@@ -3,6 +3,7 @@ use crate::scanner::ScanResult;
 use chrono::NaiveDate;
 use colored::Colorize;
 use serde::Serialize;
+use std::io::Write;
 use std::path::Path;
 
 /// Output format selection.
@@ -131,17 +132,7 @@ pub fn print_scan_summary(result: &ScanResult) {
 
 /// Shared summary-line renderer used by both `print_terminal` and `print_scan_summary`.
 fn print_summary_line(result: &ScanResult, use_color: bool) {
-    let (detonated_count, ticking_count, inert_count) =
-        result
-            .fuses
-            .iter()
-            .fold((0usize, 0usize, 0usize), |(d, t, i), fuse| {
-                match fuse.status {
-                    Status::Detonated => (d + 1, t, i),
-                    Status::Ticking => (d, t + 1, i),
-                    Status::Inert => (d, t, i + 1),
-                }
-            });
+    let (detonated_count, ticking_count, inert_count) = status_counts(result);
 
     let summary = format!(
         "Swept {} file(s) · {} fuse(s) total · {} detonated · {} ticking · {} inert",
@@ -165,6 +156,19 @@ fn print_summary_line(result: &ScanResult, use_color: bool) {
     }
 }
 
+fn status_counts(result: &ScanResult) -> (usize, usize, usize) {
+    result
+        .fuses
+        .iter()
+        .fold((0usize, 0usize, 0usize), |(d, t, i), fuse| {
+            match fuse.status {
+                Status::Detonated => (d + 1, t, i),
+                Status::Ticking => (d, t + 1, i),
+                Status::Inert => (d, t, i + 1),
+            }
+        })
+}
+
 /// Format the owner column: `[owner]` if explicit, `[~blame]` if inferred, empty otherwise.
 fn owner_display(fuse: &Fuse) -> String {
     if let Some(o) = &fuse.owner {
@@ -173,6 +177,19 @@ fn owner_display(fuse: &Fuse) -> String {
         format!(" [~{}]", b)
     } else {
         String::new()
+    }
+}
+
+fn annotation_text(fuse: &Fuse) -> String {
+    match &fuse.owner {
+        Some(owner) => format!(
+            "{}[{}][{}]: {}",
+            fuse.tag,
+            fuse.date_str(),
+            owner,
+            fuse.message
+        ),
+        None => format!("{}[{}]: {}", fuse.tag, fuse.date_str(), fuse.message),
     }
 }
 
@@ -383,6 +400,167 @@ pub fn print_json_list_to_writer(
         .map(|f| JsonFuse::from_fuse(f, today))
         .collect();
     serde_json::to_writer_pretty(writer, &items).map_err(std::io::Error::other)
+}
+
+// ─── Agent-focused output ────────────────────────────────────────────────────
+
+/// Print a compact, deterministic sweep summary for AI agents.
+pub fn print_agent_summary(result: &ScanResult, failed: bool) {
+    if let Err(e) = print_agent_summary_to_writer(result, failed, std::io::stdout()) {
+        eprintln!("error: failed to write agent summary: {}", e);
+    }
+}
+
+/// Write the agent summary to any `Write` sink.
+pub fn print_agent_summary_to_writer(
+    result: &ScanResult,
+    failed: bool,
+    mut writer: impl Write,
+) -> std::io::Result<()> {
+    let (detonated, ticking, inert) = status_counts(result);
+    writeln!(
+        writer,
+        "timebomb: {}",
+        if failed { "failed" } else { "passed" }
+    )?;
+    writeln!(writer, "swept_files: {}", result.swept_files)?;
+    writeln!(writer, "total_fuses: {}", result.total())?;
+    writeln!(writer, "detonated: {}", detonated)?;
+    writeln!(writer, "ticking: {}", ticking)?;
+    writeln!(writer, "inert: {}", inert)?;
+    writeln!(writer, "next_action:")?;
+
+    let mut wrote_action = false;
+    for fuse in &result.fuses {
+        if matches!(fuse.status, Status::Detonated | Status::Ticking) {
+            writeln!(
+                writer,
+                "- fix {} {}",
+                fuse.location(),
+                annotation_text(fuse)
+            )?;
+            wrote_action = true;
+        }
+    }
+
+    if !wrote_action {
+        writeln!(writer, "- none")?;
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct FixPlan<'a> {
+    status: &'static str,
+    actions: Vec<FixPlanAction<'a>>,
+}
+
+#[derive(Debug, Serialize)]
+struct FixPlanAction<'a> {
+    kind: &'static str,
+    file: String,
+    line: usize,
+    target: String,
+    tag: &'a str,
+    date: String,
+    owner: Option<&'a str>,
+    status: &'a str,
+    message: &'a str,
+    command: String,
+}
+
+impl<'a> FixPlanAction<'a> {
+    fn from_fuse(fuse: &'a Fuse) -> Self {
+        let target = fuse.location();
+        let kind = match fuse.status {
+            Status::Detonated => "review_detonated",
+            Status::Ticking => "review_ticking",
+            Status::Inert => "none",
+        };
+        FixPlanAction {
+            kind,
+            file: fuse.file.display().to_string(),
+            line: fuse.line,
+            target: target.clone(),
+            tag: &fuse.tag,
+            date: fuse.date_str(),
+            owner: fuse.owner.as_deref(),
+            status: fuse.status.as_str(),
+            message: &fuse.message,
+            command: format!(
+                "timebomb delay {} --date YYYY-MM-DD --reason \"...\"",
+                target
+            ),
+        }
+    }
+}
+
+/// Print a non-mutating JSON remediation plan for detonated and ticking fuses.
+pub fn print_fix_plan_json(result: &ScanResult) {
+    if let Err(e) = print_fix_plan_json_to_writer(result, std::io::stdout()) {
+        eprintln!("error: failed to write fix plan: {}", e);
+    }
+}
+
+/// Write a non-mutating JSON remediation plan to any `Write` sink.
+pub fn print_fix_plan_json_to_writer(
+    result: &ScanResult,
+    mut writer: impl Write,
+) -> std::io::Result<()> {
+    let status = if result.has_detonated() {
+        "failed"
+    } else if result.is_ticking() {
+        "attention"
+    } else {
+        "passed"
+    };
+    let actions = result
+        .fuses
+        .iter()
+        .filter(|fuse| matches!(fuse.status, Status::Detonated | Status::Ticking))
+        .map(FixPlanAction::from_fuse)
+        .collect();
+    let plan = FixPlan { status, actions };
+    serde_json::to_writer_pretty(&mut writer, &plan).map_err(std::io::Error::other)?;
+    writeln!(writer)?;
+    Ok(())
+}
+
+/// Print a focused explanation and action menu for one fuse.
+pub fn print_explain(fuse: &Fuse, today: NaiveDate) {
+    if let Err(e) = print_explain_to_writer(fuse, today, std::io::stdout()) {
+        eprintln!("error: failed to write explanation: {}", e);
+    }
+}
+
+/// Write a focused explanation and action menu for one fuse.
+pub fn print_explain_to_writer(
+    fuse: &Fuse,
+    today: NaiveDate,
+    mut writer: impl Write,
+) -> std::io::Result<()> {
+    let target = fuse.location();
+    writeln!(writer, "{}", target)?;
+    writeln!(writer, "status: {}", fuse.status.as_str())?;
+    writeln!(writer, "days: {}", fuse.days_from_today(today))?;
+    writeln!(writer, "fuse: {}", annotation_text(fuse))?;
+    if let Some(blamed_owner) = &fuse.blamed_owner {
+        writeln!(writer, "blamed_owner: {}", blamed_owner)?;
+    }
+    writeln!(writer)?;
+    writeln!(writer, "Suggested actions:")?;
+    writeln!(
+        writer,
+        "- inspect and remove the underlying temporary code if it is no longer needed"
+    )?;
+    writeln!(
+        writer,
+        "- extend the fuse: timebomb delay {} --date YYYY-MM-DD --reason \"...\"",
+        target
+    )?;
+    writeln!(writer, "- remove the fuse: timebomb disarm {}", target)?;
+    Ok(())
 }
 
 // ─── CSV formatter ────────────────────────────────────────────────────────────
@@ -760,6 +938,88 @@ mod tests {
     fn test_print_json_list_does_not_panic() {
         let fuse = make_fuse("TODO", "2020-01-01", Status::Detonated, "detonated");
         print_json_list(&[&fuse], fixed_today());
+    }
+
+    #[test]
+    fn test_print_agent_summary_to_writer_lists_active_fuses() {
+        use crate::scanner::ScanResult;
+        let result = ScanResult {
+            fuses: vec![
+                make_fuse("TODO", "2020-01-01", Status::Detonated, "detonated"),
+                make_fuse("FIXME", "2026-04-01", Status::Ticking, "soon"),
+                make_fuse("HACK", "2099-01-01", Status::Inert, "future"),
+            ],
+            swept_files: 3,
+            skipped_files: 0,
+        };
+        let mut out = Vec::new();
+        print_agent_summary_to_writer(&result, true, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("timebomb: failed"));
+        assert!(text.contains("detonated: 1"));
+        assert!(text.contains("ticking: 1"));
+        assert!(text.contains("- fix src/foo.rs:42 TODO[2020-01-01]: detonated"));
+        assert!(text.contains("- fix src/foo.rs:42 FIXME[2026-04-01]: soon"));
+        assert!(!text.contains("HACK[2099-01-01]"));
+    }
+
+    #[test]
+    fn test_print_agent_summary_to_writer_none_when_clean() {
+        use crate::scanner::ScanResult;
+        let result = ScanResult {
+            fuses: vec![make_fuse("HACK", "2099-01-01", Status::Inert, "future")],
+            swept_files: 1,
+            skipped_files: 0,
+        };
+        let mut out = Vec::new();
+        print_agent_summary_to_writer(&result, false, &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("timebomb: passed"));
+        assert!(text.contains("next_action:\n- none"));
+    }
+
+    #[test]
+    fn test_print_fix_plan_json_to_writer_emits_actions() {
+        use crate::scanner::ScanResult;
+        let result = ScanResult {
+            fuses: vec![
+                make_fuse("TODO", "2020-01-01", Status::Detonated, "detonated"),
+                make_fuse("FIXME", "2026-04-01", Status::Ticking, "soon"),
+                make_fuse("HACK", "2099-01-01", Status::Inert, "future"),
+            ],
+            swept_files: 3,
+            skipped_files: 0,
+        };
+        let mut out = Vec::new();
+        print_fix_plan_json_to_writer(&result, &mut out).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(json["status"], "failed");
+        assert_eq!(json["actions"].as_array().unwrap().len(), 2);
+        assert_eq!(json["actions"][0]["kind"], "review_detonated");
+        assert_eq!(json["actions"][0]["target"], "src/foo.rs:42");
+        assert_eq!(
+            json["actions"][0]["command"],
+            "timebomb delay src/foo.rs:42 --date YYYY-MM-DD --reason \"...\""
+        );
+    }
+
+    #[test]
+    fn test_print_explain_to_writer_shows_action_menu() {
+        let fuse = make_fuse_with_owner(
+            "TODO",
+            "2020-01-01",
+            Status::Detonated,
+            "remove old code",
+            "alice",
+        );
+        let mut out = Vec::new();
+        print_explain_to_writer(&fuse, fixed_today(), &mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("src/foo.rs:10"));
+        assert!(text.contains("status: detonated"));
+        assert!(text.contains("fuse: TODO[2020-01-01][alice]: remove old code"));
+        assert!(text.contains("timebomb delay src/foo.rs:10 --date YYYY-MM-DD"));
+        assert!(text.contains("timebomb disarm src/foo.rs:10"));
     }
 
     #[test]
